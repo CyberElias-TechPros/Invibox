@@ -1,0 +1,10 @@
+const encoder = new TextEncoder();
+export const uid = (prefix='id') => `${prefix}_${crypto.randomUUID().replaceAll('-','')}`;
+export const randomToken = () => { const b=new Uint8Array(32);crypto.getRandomValues(b);return btoa(String.fromCharCode(...b)).replaceAll('+','-').replaceAll('/','_').replaceAll('=',''); };
+export async function sha256(value:string){const digest=await crypto.subtle.digest('SHA-256',encoder.encode(value));return [...new Uint8Array(digest)].map(x=>x.toString(16).padStart(2,'0')).join('')}
+export async function hashPassword(password:string,salt=randomToken()) { const key=await crypto.subtle.importKey('raw',encoder.encode(password),'PBKDF2',false,['deriveBits']);const bits=await crypto.subtle.deriveBits({name:'PBKDF2',hash:'SHA-256',salt:encoder.encode(salt),iterations:210000},key,256);const hash=[...new Uint8Array(bits)].map(x=>x.toString(16).padStart(2,'0')).join('');return `pbkdf2_sha256$210000$${salt}$${hash}` }
+export async function verifyPassword(password:string,stored:string){const [algo,,salt]=stored.split('$');if(algo!=='pbkdf2_sha256'||!salt)return false;const candidate=await hashPassword(password,salt);if(candidate.length!==stored.length)return false;let mismatch=0;for(let i=0;i<stored.length;i++)mismatch|=candidate.charCodeAt(i)^stored.charCodeAt(i);return mismatch===0}
+export async function hmacSha512(secret:string,value:string){const key=await crypto.subtle.importKey('raw',encoder.encode(secret),{name:'HMAC',hash:'SHA-512'},false,['sign']);const digest=await crypto.subtle.sign('HMAC',key,encoder.encode(value));return [...new Uint8Array(digest)].map(x=>x.toString(16).padStart(2,'0')).join('')}
+export const cookie=(token:string,maxAge=60*60*24*30)=>`invibox_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}; Secure`;
+export const clearCookie=()=>`invibox_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Secure`;
+export const getCookie=(header:string|undefined,name:string)=>header?.split(';').map(x=>x.trim()).find(x=>x.startsWith(name+'='))?.slice(name.length+1);

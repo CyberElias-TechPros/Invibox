@@ -1,0 +1,36 @@
+{
+  "name": "invibox",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "typecheck": "tsc -b && tsc -p worker/tsconfig.json",
+    "test": "vitest run",
+    "worker:dev": "wrangler dev --local --port 8787",
+    "db:migrate:local": "wrangler d1 migrations apply invibox-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply invibox-db --remote",
+    "smoke": "bash scripts/smoke.sh"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "latest",
+    "framer-motion": "latest",
+    "hono": "^4.13.8",
+    "lucide-react": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "typescript": "latest",
+    "vite": "latest",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260917.1",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "vitest": "^5.0.1",
+    "wait-on": "^9.1.0",
+    "wrangler": "^4.133.0"
+  }
+}
