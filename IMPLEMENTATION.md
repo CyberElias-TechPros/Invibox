@@ -53,3 +53,9 @@ npx wrangler deploy --dry-run
 ```
 
 See `docs/ARCHITECTURE.md`, `docs/API.md`, `docs/DEPLOYMENT.md`, and `docs/OPERATIONS.md`.
+
+## External integration completion pass
+
+Concrete adapters now cover Resend, Meta WhatsApp Cloud API templates/text, Twilio SMS, OpenAI-compatible chat completions and Paystack initialization/verification/webhooks. Queue delivery is paginated and records per-recipient attempts. Account recovery and team invitations use expiring hashed tokens. The organizer composer can request an AI draft; guest invitations include Paystack contribution checkout/status; check-in uses direct camera QR decoding when the browser supports it with manual fallback; a secret-free integration status endpoint supports operational readiness checks.
+
+External services remain honestly inactive until the provider-issued values listed in `docs/DEPLOYMENT.md` are entered and sender/template/domain approvals are completed.

@@ -7,6 +7,13 @@ workers_dev = true
 APP_ENV = "development"
 APP_ORIGIN = "http://localhost:5173"
 DEMO_MODE = "true"
+EMAIL_FROM = ""
+WHATSAPP_PHONE_NUMBER_ID = ""
+WHATSAPP_TEMPLATE_NAME = "event_update"
+WHATSAPP_TEMPLATE_LANGUAGE = "en"
+TWILIO_FROM_NUMBER = ""
+AI_BASE_URL = "https://api.openai.com/v1"
+AI_MODEL = "gpt-4o-mini"
 
 [[d1_databases]]
 binding = "DB"

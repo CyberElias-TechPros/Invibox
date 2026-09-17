@@ -47,3 +47,15 @@ All routes enforce event ownership or membership.
 - `POST /demo/bootstrap` — development only and disabled unless `DEMO_MODE=true`
 
 The notification queue consumer explicitly marks jobs failed with `PROVIDER_NOT_CONFIGURED` until WhatsApp, email or SMS provider adapters and credentials are configured; it never reports fake delivery.
+
+## Integrated production workflows
+
+- `POST /auth/password/forgot`, `POST /auth/password/reset` — enumeration-safe, one-hour recovery tokens; recovery email uses Resend.
+- `GET /events/:eventId/integrations/status` — secret-free provider readiness booleans.
+- `POST /events/:eventId/team-invitations`, `POST /team-invitations/accept` — expiring, email-bound collaborator invitations.
+- `POST /events/:eventId/ai/assist` — ownership-checked, rate-limited OpenAI-compatible event copilot.
+- `POST /public/payments/paystack/initialize` — guest/public NGN checkout creation.
+- `GET /public/payments/:reference` — persisted payment status with server-side Paystack verification while pending.
+- `POST /webhooks/paystack` — HMAC-verified, idempotent payment confirmation.
+
+Notification Queue jobs page through the selected guest audience and call Resend, Meta WhatsApp or Twilio. Every per-recipient result is recorded in `notification_deliveries`; announcements become `sent` only when at least one recipient succeeds and none fails.

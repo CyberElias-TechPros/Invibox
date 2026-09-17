@@ -33,8 +33,8 @@ The repository originally contained only a 91 KB aspirational README. It had no 
 | Occasion schedule | Yes | Yes | Yes | Yes | Yes | Offline cache | Type/build validation |
 | Personalized invite | Yes | Yes | Yes | Token/access | Public boundary | Invalid-token response | API exercised manually |
 | Multi-event RSVP | Yes | Yes | Yes | Yes | Guest occasion | Idempotent replay | API exercised twice |
-| Check-in | Yes | Yes | Yes | Yes | Staff/event | Optimistic rollback | Endpoint implemented |
-| Announcements | Yes | Yes/Queue | Yes | Yes | Event role | Explicit failed state | Queue accepted manually |
+| Check-in | Camera + fallback | Yes | Yes | Yes | Role-scoped | Optimistic rollback | Full-stack smoke |
+| Announcements | Yes + AI draft | Yes/Queue/providers | Attempts | Yes | Role-scoped | Per-recipient failed state | Provider unit tests |
 | Media upload | Yes entry | Yes/R2 | Metadata | MIME/size | Event role | Structured errors | Environment dependent |
 
 ## Design and UX
@@ -66,7 +66,7 @@ The public acquisition surface now includes focused landing, features, solutions
 
 - Dependency installation
 - TypeScript checks for frontend and Worker
-- 7 domain and security-primitive tests
+- 13 domain, security-primitive and provider-adapter tests
 - Vite production build
 - Wrangler Worker dry-run bundle
 - Local D1 migrations (31 schema commands)
