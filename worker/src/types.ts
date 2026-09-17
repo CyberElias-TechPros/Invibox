@@ -1,0 +1,26 @@
+export type Bindings = {
+  DB: D1Database;
+  MEDIA: R2Bucket;
+  CACHE: KVNamespace;
+  NOTIFICATIONS: Queue<NotificationJob>;
+  APP_ENV: string;
+  APP_ORIGIN: string;
+  DEMO_MODE: string;
+  SESSION_PEPPER?: string;
+  PAYSTACK_SECRET_KEY?: string;
+  RESEND_API_KEY?: string;
+  EMAIL_FROM?: string;
+  WHATSAPP_ACCESS_TOKEN?: string;
+  WHATSAPP_PHONE_NUMBER_ID?: string;
+  WHATSAPP_TEMPLATE_NAME?: string;
+  WHATSAPP_TEMPLATE_LANGUAGE?: string;
+  TWILIO_ACCOUNT_SID?: string;
+  TWILIO_AUTH_TOKEN?: string;
+  TWILIO_FROM_NUMBER?: string;
+  AI_API_KEY?: string;
+  AI_BASE_URL?: string;
+  AI_MODEL?: string;
+};
+export type Variables = { userId: string; requestId: string };
+export type AppEnv = { Bindings: Bindings; Variables: Variables };
+export type NotificationJob = { id:string; eventId:string; channel:'email'|'sms'|'whatsapp'; audience:string; message:string; createdAt:string; offset?:number };

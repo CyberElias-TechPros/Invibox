@@ -1,0 +1,1 @@
+-- Reserved for forward-only schema evolution. Demo records are created through the idempotent bootstrap endpoint.

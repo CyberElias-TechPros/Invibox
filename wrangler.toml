@@ -1,0 +1,45 @@
+name = "invibox-api"
+main = "worker/src/index.ts"
+compatibility_date = "2026-09-17"
+workers_dev = true
+
+[vars]
+APP_ENV = "development"
+APP_ORIGIN = "http://localhost:5173"
+DEMO_MODE = "true"
+EMAIL_FROM = ""
+WHATSAPP_PHONE_NUMBER_ID = ""
+WHATSAPP_TEMPLATE_NAME = "event_update"
+WHATSAPP_TEMPLATE_LANGUAGE = "en"
+TWILIO_FROM_NUMBER = ""
+AI_BASE_URL = "https://api.openai.com/v1"
+AI_MODEL = "gpt-4o-mini"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "invibox-db"
+database_id = "local-invibox-db"
+migrations_dir = "worker/migrations"
+
+[[r2_buckets]]
+binding = "MEDIA"
+bucket_name = "invibox-media"
+preview_bucket_name = "invibox-media-preview"
+
+[[kv_namespaces]]
+binding = "CACHE"
+id = "local-cache-placeholder"
+preview_id = "local-cache-placeholder"
+
+[[queues.producers]]
+binding = "NOTIFICATIONS"
+queue = "invibox-notifications"
+
+[[queues.consumers]]
+queue = "invibox-notifications"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 3
+
+[triggers]
+crons = ["17 3 * * *"]
