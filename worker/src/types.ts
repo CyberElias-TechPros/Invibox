@@ -23,4 +23,12 @@ export type Bindings = {
 };
 export type Variables = { userId: string; requestId: string };
 export type AppEnv = { Bindings: Bindings; Variables: Variables };
-export type NotificationJob = { id:string; eventId:string; channel:'email'|'sms'|'whatsapp'; audience:string; message:string; createdAt:string; offset?:number };
+export type NotificationJob = {
+  id: string;
+  eventId: string;
+  channel: "email" | "sms" | "whatsapp";
+  audience: string;
+  message: string;
+  createdAt: string;
+  cursor?: string;
+};

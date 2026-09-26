@@ -12,8 +12,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm run format:check
       - run: npm run typecheck
       - run: npm test
+      - run: npm run test:database
       - run: npm run db:migrate:local
       - name: Full-stack smoke test
         run: |
@@ -21,5 +23,9 @@ jobs:
           npm run dev > /tmp/vite.log 2>&1 &
           npx wait-on http-get://localhost:8787/api/v1/health http-get://localhost:5173
           npm run smoke
+          npm run test:regression
+          npx playwright install --with-deps chromium
+          npm run test:e2e
+      - run: npm audit --audit-level=high
       - run: npm run build
       - run: npx wrangler deploy --dry-run
