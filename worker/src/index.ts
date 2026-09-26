@@ -1,3 +1,7 @@
+import { registerCommunicationRoutes, withUnsubscribe } from "./communications";
+import { initializePayment, reconcilePayment } from "./payments";
+import { registerPrivacyRoutes, purgeMedia } from "./privacy";
+import { registerAccountRoutes, requireVerified } from "./account";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import {
@@ -181,7 +185,7 @@ async function authenticate(c: any, next: any) {
     throw new HTTPException(401, { message: "Authentication required" });
   const hash = await sha256(raw + (c.env.SESSION_PEPPER || ""));
   const row = (await c.env.DB.prepare(
-    "SELECT user_id FROM sessions WHERE token_hash=? AND julianday(expires_at) > julianday('now')",
+    "SELECT s.user_id FROM sessions s JOIN users u ON u.id=s.user_id WHERE u.disabled_at IS NULL AND s.auth_version=u.auth_version AND token_hash=? AND julianday(expires_at) > julianday('now')",
   )
     .bind(hash)
     .first()) as { user_id: string } | null;
@@ -204,7 +208,9 @@ async function ownEvent(c: any, eventId: string) {
   if (
     !["GET", "HEAD"].includes(c.req.method) &&
     ["completed", "archived"].includes(row.lifecycle) &&
-    resource !== ""
+    resource !== "" &&
+    !(c.req.method === "DELETE" && resource.startsWith("/team")) &&
+    !/^\/payments\/[^/]+\/reconcile$/.test(resource)
   )
     throw new HTTPException(409, { message: "This event is read-only" });
   if (
@@ -263,7 +269,7 @@ app.post("/api/v1/auth/register", async (c) => {
 app.post("/api/v1/auth/login", async (c) => {
   const body = await json(c.req.raw, credentials);
   const user = await c.env.DB.prepare(
-    "SELECT id,email,password_hash,full_name FROM users WHERE email=?",
+    "SELECT id,email,password_hash,full_name,auth_version FROM users WHERE email=? AND disabled_at IS NULL",
   )
     .bind(body.email)
     .first<any>();
@@ -271,7 +277,7 @@ app.post("/api/v1/auth/login", async (c) => {
     throw new HTTPException(401, { message: "Invalid email or password" });
   const token = randomToken();
   await c.env.DB.prepare(
-    "INSERT INTO sessions(id,user_id,token_hash,expires_at,user_agent) VALUES(?,?,?,?,?)",
+    "INSERT INTO sessions(id,user_id,token_hash,expires_at,user_agent,auth_version) VALUES(?,?,?,?,?,?)",
   )
     .bind(
       uid("ses"),
@@ -279,6 +285,7 @@ app.post("/api/v1/auth/login", async (c) => {
       await sha256(token + (c.env.SESSION_PEPPER || "")),
       expires(),
       c.req.header("user-agent") || null,
+      user.auth_version,
     )
     .run();
   c.header("Set-Cookie", cookie(token));
@@ -297,7 +304,7 @@ app.post("/api/v1/auth/password/forgot", async (c) => {
     }),
   );
   const user = await c.env.DB.prepare(
-    "SELECT id,full_name,email FROM users WHERE email=?",
+    "SELECT id,full_name,email FROM users WHERE email=? AND disabled_at IS NULL",
   )
     .bind(body.email)
     .first<any>();
@@ -357,15 +364,22 @@ app.post("/api/v1/auth/password/reset", async (c) => {
     throw new HTTPException(400, {
       message: "Reset link is invalid or expired",
     });
+  const claim = uid("claim");
   await c.env.DB.batch([
     c.env.DB.prepare(
-      "UPDATE users SET password_hash=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND EXISTS(SELECT 1 FROM password_reset_tokens WHERE token_hash=? AND consumed_at IS NULL AND julianday(expires_at)>julianday('now'))",
+      "INSERT INTO password_reset_claims(id,token_hash) VALUES(?,?)",
+    ).bind(claim, tokenHash),
+    c.env.DB.prepare(
+      "UPDATE users SET password_hash=?,auth_version=auth_version+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND EXISTS(SELECT 1 FROM password_reset_tokens WHERE token_hash=? AND consumed_at IS NULL AND julianday(expires_at)>julianday('now'))",
     ).bind(await hashPassword(body.password), record.user_id, tokenHash),
     c.env.DB.prepare(
       "UPDATE password_reset_tokens SET consumed_at=CURRENT_TIMESTAMP WHERE user_id=? AND consumed_at IS NULL",
     ).bind(record.user_id),
     c.env.DB.prepare("DELETE FROM sessions WHERE user_id=?").bind(
       record.user_id,
+    ),
+    c.env.DB.prepare("DELETE FROM password_reset_claims WHERE id=?").bind(
+      claim,
     ),
   ]);
   return c.json({ ok: true });
@@ -380,12 +394,16 @@ app.post("/api/v1/auth/logout", authenticate, async (c) => {
 });
 app.get("/api/v1/auth/me", authenticate, async (c) => {
   const user = await c.env.DB.prepare(
-    "SELECT id,email,full_name AS name,platform_role AS role FROM users WHERE id=?",
+    "SELECT id,email,full_name AS name,platform_role AS role,email_verified_at AS emailVerifiedAt FROM users WHERE id=?",
   )
     .bind(c.get("userId"))
     .first();
   return c.json({ user });
 });
+
+registerAccountRoutes(app, authenticate, rateLimit);
+registerPrivacyRoutes(app, authenticate, rateLimit);
+registerCommunicationRoutes(app, rateLimit);
 
 app.post("/api/v1/demo/bootstrap", async (c) => {
   if (c.env.APP_ENV !== "development" || c.env.DEMO_MODE !== "true")
@@ -720,6 +738,7 @@ app.patch("/api/v1/events/:eventId", async (c) => {
     });
   if (body.lifecycle) assertTransition(authorized.lifecycle, body.lifecycle);
   if (body.lifecycle === "published") {
+    await requireVerified(c);
     const occasion = await c.env.DB.prepare(
       "SELECT id FROM occasions WHERE event_id=? LIMIT 1",
     )
@@ -769,7 +788,7 @@ app.get("/api/v1/events/:eventId/snapshot", async (c) => {
   const event = await ownEvent(c, id);
   const [g, o, b, v, s, t, m, a] = await Promise.all([
     c.env.DB.prepare(
-      "SELECT g.id,g.name,g.email,g.phone,COALESCE(gg.name,'Guests') AS 'group',g.status,g.party_size AS party,COALESCE(g.meal,'—') AS meal,g.table_name AS 'table',g.checked_in_at IS NOT NULL AS checkedIn FROM guests g LEFT JOIN guest_groups gg ON gg.id=g.group_id WHERE g.event_id=? ORDER BY g.created_at",
+      "SELECT g.id,g.name,g.email,g.phone,g.email_opt_in,g.sms_opt_in,g.whatsapp_opt_in,COALESCE(gg.name,'Guests') AS 'group',g.status,g.party_size AS party,COALESCE(g.meal,'—') AS meal,g.table_name AS 'table',g.checked_in_at IS NOT NULL AS checkedIn FROM guests g LEFT JOIN guest_groups gg ON gg.id=g.group_id WHERE g.event_id=? ORDER BY g.created_at",
     )
       .bind(id)
       .all(),
@@ -1304,6 +1323,7 @@ app.get("/api/v1/events/:eventId/integrations/status", async (c) => {
   });
 });
 app.post("/api/v1/events/:eventId/team-invitations", async (c) => {
+  await requireVerified(c);
   const id = c.req.param("eventId");
   const event = (await ownEvent(c, id)) as any;
   const body = await json(
@@ -1531,6 +1551,7 @@ app.put("/api/v1/events/:eventId/guests/:guestId/access", async (c) => {
   return c.json({ ok: true });
 });
 app.post("/api/v1/events/:eventId/ai/assist", rateLimit, async (c) => {
+  await requireVerified(c);
   const id = c.req.param("eventId");
   const event = (await ownEvent(c, id)) as any;
   const body = await json(
@@ -1565,7 +1586,7 @@ app.get("/api/v1/events/:eventId/announcements", async (c) => {
   const id = c.req.param("eventId");
   await ownEvent(c, id);
   const rows = await c.env.DB.prepare(
-    "SELECT a.*,SUM(CASE WHEN d.status='sent' THEN 1 ELSE 0 END) AS delivered_count,SUM(CASE WHEN d.status='failed' THEN 1 ELSE 0 END) AS failed_count FROM announcements a LEFT JOIN notification_deliveries d ON d.announcement_id=a.id WHERE a.event_id=? GROUP BY a.id ORDER BY a.created_at DESC LIMIT 100",
+    "SELECT a.*,SUM(CASE WHEN d.status='sent' THEN 1 ELSE 0 END) AS delivered_count,SUM(CASE WHEN d.status='failed' THEN 1 ELSE 0 END) AS failed_count,SUM(CASE WHEN d.status='skipped' THEN 1 ELSE 0 END) AS skipped_count FROM announcements a LEFT JOIN notification_deliveries d ON d.announcement_id=a.id WHERE a.event_id=? GROUP BY a.id ORDER BY a.created_at DESC LIMIT 100",
   )
     .bind(id)
     .all();
@@ -1585,6 +1606,7 @@ async function dispatchOutbox(env: AppEnv["Bindings"]) {
   }
 }
 app.post("/api/v1/events/:eventId/announcements", rateLimit, async (c) => {
+  await requireVerified(c);
   const id = c.req.param("eventId");
   await ownEvent(c, id);
   const body = await json(c.req.raw, announcementSchema),
@@ -1615,6 +1637,16 @@ app.post("/api/v1/events/:eventId/announcements", rateLimit, async (c) => {
         : body.audience === "vip"
           ? "gg.name='VIP'"
           : "1=1";
+  const eligible = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS count FROM guests g LEFT JOIN guest_groups gg ON gg.id=g.group_id WHERE g.event_id=? AND ${audienceClause} AND g.${body.channel}_opt_in=1`,
+  )
+    .bind(id)
+    .first<{ count: number }>();
+  if (!eligible?.count)
+    throw new HTTPException(422, {
+      message:
+        "No guests in this audience have opted in to this channel. Ask guests to update preferences through their invitation.",
+    });
   await c.env.DB.batch([
     c.env.DB.prepare(
       "INSERT INTO announcements(id,event_id,created_by,channel,audience,message) VALUES(?,?,?,?,?,?)",
@@ -1630,7 +1662,7 @@ app.post("/api/v1/events/:eventId/announcements", rateLimit, async (c) => {
       "INSERT INTO notification_outbox(id,payload_json) VALUES(?,?)",
     ).bind(jobId, JSON.stringify(job)),
     c.env.DB.prepare(
-      `INSERT INTO announcement_recipients(announcement_id,guest_id) SELECT ?,g.id FROM guests g LEFT JOIN guest_groups gg ON gg.id=g.group_id WHERE g.event_id=? AND ${audienceClause}`,
+      `INSERT INTO announcement_recipients(announcement_id,guest_id) SELECT ?,g.id FROM guests g LEFT JOIN guest_groups gg ON gg.id=g.group_id WHERE g.event_id=? AND ${audienceClause} AND g.${body.channel}_opt_in=1`,
     ).bind(jobId, id),
   ]);
   c.executionCtx.waitUntil(
@@ -1855,7 +1887,7 @@ app.get("/api/v1/public/events/:slug", async (c) => {
   let guest = null;
   if (token) {
     guest = await c.env.DB.prepare(
-      "SELECT id,name,party_size,status,table_name FROM guests WHERE event_id=? AND access_token_hash=?",
+      "SELECT id,name,party_size,status,table_name,email_opt_in,sms_opt_in,whatsapp_opt_in,communication_consent_at FROM guests WHERE event_id=? AND access_token_hash=?",
     )
       .bind(event.id, await sha256(token))
       .first();
@@ -1977,152 +2009,68 @@ app.post("/api/v1/public/rsvp", async (c) => {
 app.post(
   "/api/v1/public/payments/paystack/initialize",
   rateLimit,
-  async (c) => {
-    if (!c.env.PAYSTACK_SECRET_KEY)
-      throw new HTTPException(503, {
-        message: "Gift payments are not configured for this environment",
-      });
-    const body = await json(
-      c.req.raw,
-      z.object({
-        slug: z.string().min(2).max(100),
-        token: z.string().max(200).optional(),
-        email: z.string().email(),
-        amount: z.number().min(100).max(100000000),
-        purpose: z.enum(["gift", "contribution"]).default("gift"),
-      }),
-    );
-    const event = await c.env.DB.prepare(
-      "SELECT id,title,visibility,settings_json FROM events WHERE slug=? AND lifecycle IN ('published','active','live')",
-    )
-      .bind(body.slug)
-      .first<any>();
-    if (!event)
-      throw new HTTPException(404, {
-        message: "Event is not accepting payments",
-      });
-    let guestId = null;
-    if (body.token) {
-      const guest = await c.env.DB.prepare(
-        "SELECT id FROM guests WHERE event_id=? AND access_token_hash=?",
-      )
-        .bind(event.id, await sha256(body.token))
-        .first<any>();
-      if (!guest)
-        throw new HTTPException(403, { message: "Invalid guest invitation" });
-      guestId = guest.id;
-    }
-    if (event.visibility !== "public" && !guestId)
-      throw new HTTPException(404, { message: "Invitation not found" });
-    if (!JSON.parse(event.settings_json).capabilities?.includes("gifts"))
-      throw new HTTPException(409, {
-        message: "Gifting is not enabled for this event",
-      });
-    const reference = uid("pay"),
-      paymentId = uid("pmt"),
-      amountMinor = Math.round(body.amount * 100);
-    await c.env.DB.prepare(
-      "INSERT INTO payments(id,event_id,guest_id,provider,reference,purpose,amount_minor,status) VALUES(?,?,?,'paystack',?,?,?,'pending')",
-    )
-      .bind(paymentId, event.id, guestId, reference, body.purpose, amountMinor)
-      .run();
-    const response = await fetch(
-      "https://api.paystack.co/transaction/initialize",
-      {
-        method: "POST",
-        signal: AbortSignal.timeout(15000),
-        headers: {
-          Authorization: `Bearer ${c.env.PAYSTACK_SECRET_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          email: body.email,
-          amount: amountMinor,
-          currency: "NGN",
-          reference,
-          callback_url: `${c.env.APP_ORIGIN}/invite/${body.slug}?payment=${encodeURIComponent(reference)}`,
-          metadata: {
-            event_id: event.id,
-            payment_id: paymentId,
-            purpose: body.purpose,
-          },
-        }),
-      },
-    );
-    const result: any = await response.json();
-    if (!response.ok || !result.status) {
-      await c.env.DB.prepare(
-        "UPDATE payments SET status='failed',updated_at=CURRENT_TIMESTAMP WHERE id=?",
-      )
-        .bind(paymentId)
-        .run();
-      throw new HTTPException(502, {
-        message: "Payment provider could not initialize checkout",
-      });
-    }
-    await c.env.DB.prepare(
-      "UPDATE payments SET status='initialized',checkout_url=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
-    )
-      .bind(result.data.authorization_url, paymentId)
-      .run();
-    return c.json(
-      { paymentId, reference, checkoutUrl: result.data.authorization_url },
-      201,
-    );
-  },
+  initializePayment,
 );
 app.get("/api/v1/public/payments/:reference", rateLimit, async (c) => {
-  const reference = c.req.param("reference");
-  let payment = await c.env.DB.prepare(
-    "SELECT reference,purpose,amount_minor,currency,status,paid_at FROM payments WHERE reference=?",
-  )
-    .bind(reference)
-    .first<any>();
-  if (!payment) throw new HTTPException(404, { message: "Payment not found" });
-  if (
-    c.env.PAYSTACK_SECRET_KEY &&
-    ["pending", "initialized"].includes(payment.status)
-  ) {
-    try {
-      const response = await fetch(
-        `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
-        {
-          signal: AbortSignal.timeout(15000),
-          headers: { Authorization: `Bearer ${c.env.PAYSTACK_SECRET_KEY}` },
-        },
-      );
-      const result: any = await response.json();
-      if (
-        response.ok &&
-        result.status &&
-        paymentMatches(payment, result.data)
-      ) {
-        await c.env.DB.prepare(
-          "UPDATE payments SET status='paid',paid_at=COALESCE(paid_at,CURRENT_TIMESTAMP),updated_at=CURRENT_TIMESTAMP WHERE reference=? AND status IN ('pending','initialized')",
-        )
-          .bind(reference)
-          .run();
-        payment = { ...payment, status: "paid", paid_at: nowIso() };
-      }
-    } catch (error) {
-      console.warn(
-        JSON.stringify({
-          level: "warn",
-          code: "PAYMENT_VERIFY_FAILED",
-          reference,
-          message: error instanceof Error ? error.message : "unknown",
-        }),
-      );
-    }
+  let payment;
+  try {
+    payment = await reconcilePayment(c.env, c.req.param("reference"));
+  } catch (error) {
+    if (error instanceof HTTPException) throw error;
+    payment = await c.env.DB.prepare(
+      "SELECT reference,purpose,amount_minor,status,paid_at FROM payments WHERE reference=?",
+    )
+      .bind(c.req.param("reference"))
+      .first<any>();
+    if (!payment)
+      throw new HTTPException(404, { message: "Payment not found" });
   }
   return c.json({
     reference: payment.reference,
     purpose: payment.purpose,
-    amount: Number(payment.amount_minor) / 100,
+    amount: payment.amount_minor / 100,
     status: payment.status,
     paidAt: payment.paid_at,
   });
 });
+app.get("/api/v1/events/:eventId/payments", async (c) => {
+  const event = await ownEvent(c, c.req.param("eventId"));
+  const rows = await c.env.DB.prepare(
+    "SELECT reference,purpose,amount_minor,currency,status,initialization_state,paid_at,created_at,last_verified_at FROM payments WHERE event_id=? ORDER BY created_at DESC,id DESC LIMIT 100",
+  )
+    .bind(event.id)
+    .all();
+  const totals = await c.env.DB.prepare(
+    "SELECT COUNT(*) AS count,COALESCE(SUM(CASE WHEN status='paid' THEN amount_minor ELSE 0 END),0) AS paid_minor FROM payments WHERE event_id=?",
+  )
+    .bind(event.id)
+    .first();
+  return c.json({ payments: rows.results, totals });
+});
+app.post(
+  "/api/v1/events/:eventId/payments/:reference/reconcile",
+  rateLimit,
+  async (c) => {
+    const event = await ownEvent(c, c.req.param("eventId"));
+    const owned = await c.env.DB.prepare(
+      "SELECT id FROM payments WHERE event_id=? AND reference=?",
+    )
+      .bind(event.id, c.req.param("reference"))
+      .first();
+    if (!owned) throw new HTTPException(404, { message: "Payment not found" });
+    if (!c.env.PAYSTACK_SECRET_KEY)
+      throw new HTTPException(503, { message: "Paystack is not configured" });
+    try {
+      const payment = await reconcilePayment(c.env, c.req.param("reference"));
+      return c.json({ status: payment.status });
+    } catch {
+      throw new HTTPException(502, {
+        message:
+          "Could not verify with Paystack. The stored payment state has not been marked paid.",
+      });
+    }
+  },
+);
 app.post("/api/v1/webhooks/paystack", async (c) => {
   if (!c.env.PAYSTACK_SECRET_KEY)
     throw new HTTPException(503, {
@@ -2218,6 +2166,14 @@ app.onError((err, c) => {
       400,
     );
   const conflicts: Record<string, string> = {
+    archive_required:
+      "Archive every affected event before requesting deletion.",
+    reset_consumed:
+      "This password reset link was already used or expired. Request a new link.",
+    financial_retention:
+      "Events with payment records cannot be deleted automatically. Archive the event and contact support for a reviewed retention request.",
+    account_changed:
+      "Account credentials changed. Sign in again before retrying.",
     stale_snapshot:
       "This data changed on the server. Reload before editing again.",
     tenant_conflict: "Record does not belong to this event",
@@ -2312,12 +2268,36 @@ export default {
                 prior.attempts >= 3)
             )
               continue;
+            const preference = await env.DB.prepare(
+              `SELECT name,email,phone,${announcement.channel}_opt_in AS allowed FROM guests WHERE id=? AND event_id=?`,
+            )
+              .bind(recipient.id, job.eventId)
+              .first<{
+                allowed: number;
+                name: string;
+                email: string | null;
+                phone: string | null;
+              }>();
+            if (!preference) continue;
+            if (!preference.allowed) {
+              await env.DB.prepare(
+                "INSERT INTO notification_deliveries(id,announcement_id,guest_id,channel,status,error_message) VALUES(?,?,?,?,'skipped','Guest opted out') ON CONFLICT(announcement_id,guest_id) DO UPDATE SET status='skipped',retryable=0,error_message='Guest opted out'",
+              )
+                .bind(uid("dlv"), job.id, recipient.id, announcement.channel)
+                .run();
+              continue;
+            }
             try {
               const result: any = await sendNotification(
                 env,
                 job.channel,
-                recipient,
-                job.message,
+                preference,
+                await withUnsubscribe(
+                  env,
+                  recipient.id,
+                  announcement.channel,
+                  job.message,
+                ),
                 `Update from ${announcement.event_title}`,
                 `${job.id}-${recipient.id}`,
               );
@@ -2385,12 +2365,13 @@ export default {
           continue;
         }
         const totals = await env.DB.prepare(
-          "SELECT SUM(status='sent') AS sent,SUM(status='failed') AS failed FROM notification_deliveries WHERE announcement_id=?",
+          "SELECT SUM(status='sent') AS sent,SUM(status='failed') AS failed,SUM(status='skipped') AS skipped FROM notification_deliveries WHERE announcement_id=?",
         )
           .bind(job.id)
           .first<any>();
         const status =
-          Number(totals?.sent || 0) > 0 && Number(totals?.failed || 0) === 0
+          Number(totals?.sent || 0) + Number(totals?.skipped || 0) > 0 &&
+          Number(totals?.failed || 0) === 0
             ? "sent"
             : "failed";
         await env.DB.prepare(
@@ -2413,8 +2394,34 @@ export default {
     }
   },
   async scheduled(_event: ScheduledEvent, env: AppEnv["Bindings"]) {
-    await dispatchOutbox(env);
+    const outcomes = await Promise.allSettled([
+      dispatchOutbox(env),
+      purgeMedia(env),
+    ]);
+    for (let i = 0; i < outcomes.length; i++)
+      if (outcomes[i].status === "rejected")
+        console.error(
+          JSON.stringify({
+            code: i === 0 ? "OUTBOX_RECOVERY_FAILED" : "MEDIA_ERASURE_FAILED",
+          }),
+        );
+    if (env.PAYSTACK_SECRET_KEY) {
+      const pending = await env.DB.prepare(
+        "SELECT reference FROM payments WHERE status IN ('pending','initialized') AND created_at>datetime('now','-7 days') AND (last_verified_at IS NULL OR julianday(last_verified_at)<julianday('now','-30 minutes')) ORDER BY COALESCE(last_verified_at,created_at) LIMIT 5",
+      ).all<{ reference: string }>();
+      for (const row of pending.results)
+        try {
+          await reconcilePayment(env, row.reference);
+        } catch {
+          console.warn(
+            JSON.stringify({ code: "PAYMENT_RECONCILIATION_UNAVAILABLE" }),
+          );
+        }
+    }
     await env.DB.batch([
+      env.DB.prepare(
+        "DELETE FROM email_verifications WHERE julianday(expires_at)<=julianday('now')",
+      ),
       env.DB.prepare("DELETE FROM rate_limits WHERE expires_at<?").bind(
         Math.floor(Date.now() / 1000),
       ),

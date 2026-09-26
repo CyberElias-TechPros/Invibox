@@ -58,7 +58,7 @@ function Nav({ dark = false }: { dark?: boolean }) {
         <A href="/features">Features</A>
         <A href="/solutions">Solutions</A>
         <A href="/templates">Templates</A>
-        <A href="/pricing">Pricing</A>
+        <A href="/pricing">Availability</A>
         <A href="/about">Our story</A>
         <A href="/app" className="m-login">
           Log in
@@ -104,7 +104,7 @@ function Footer() {
           <b>Product</b>
           <A href="/features">Features</A>
           <A href="/templates">Templates</A>
-          <A href="/pricing">Pricing</A>
+          <A href="/pricing">Availability</A>
           <A href="/app">Sign in</A>
         </div>
         <div>
@@ -343,7 +343,7 @@ function Landing() {
         <div className="m-phone-stack">
           <div className="m-phone-card one">
             <img src="/gallery-couple.jpg" />
-            <span>DEAR KEMI</span>
+            <span>SAMPLE INVITATION · DEAR KEMI</span>
             <h3>
               Amaka <i>&</i> Chidi
             </h3>
@@ -384,7 +384,7 @@ function Landing() {
             </p>
             <div className="m-mini-ui">
               <WandSparkles />
-              <b>Design with AI</b>
+              <b>Draft wording with AI</b>
               <i>“Make it feel like us.”</i>
             </div>
           </Reveal>
@@ -405,8 +405,8 @@ function Landing() {
             <span>AFTER</span>
             <h3>Keep the feeling</h3>
             <p>
-              Gather every photograph, message and little moment into a memory
-              vault that lives on.
+              Upload and moderate organizer media, review event records, and
+              export data before archiving.
             </p>
             <div className="m-mini-gallery">
               <img src="/gallery-dance.jpg" />
@@ -437,9 +437,9 @@ function Landing() {
             <Sparkles />
             <span>
               <b>Invibox Assistant</b>
-              <small>Knows your event</small>
+              <small>Illustrative drafting example</small>
             </span>
-            <i>● ONLINE</i>
+            <i>● PREVIEW</i>
           </div>
           <p>Who still needs a reminder?</p>
           <blockquote>
@@ -473,9 +473,9 @@ function Landing() {
           <img src="/marketing-conference.jpg" />
           <span>
             <Globe2 />
-            Multi-language
+            Event dates
             <br />
-            and time-zone ready
+            in your timezone
           </span>
         </div>
       </section>
@@ -501,12 +501,12 @@ const features = [
   [
     WandSparkles,
     "Experience Studio",
-    "Build invitations that move, sound and feel unmistakably yours — then publish to web, print, story and QR from one event.",
+    "Publish event details and saved text sections, preview privately, and share personalized web invitations with downloadable guest QR passes.",
   ],
   [
     Users,
     "Guest Intelligence",
-    "Households, groups, plus-ones and personalized access give every person the right invitation without exposing anyone else.",
+    "Manage guest groups, reserved party sizes and personalized occasion access without exposing another guest’s invitation.",
   ],
   [
     CalendarDays,
@@ -516,27 +516,27 @@ const features = [
   [
     Send,
     "Communication Centre",
-    "Reach precisely the right people through WhatsApp, email or SMS, with reminders that respect each reply.",
+    "Queue event updates for opted-in guests through configured email, SMS or WhatsApp providers. Track accepted, failed and suppressed recipients.",
   ],
   [
     Armchair,
     "Seating & Logistics",
-    "Arrange tables, transport and accommodation while every change stays connected to the guest record.",
+    "Assign guests to tables with enforced capacity and keep seating connected to the guest record. Transport and accommodation booking are not included.",
   ],
   [
     ScanLine,
     "Check-in & Live Mode",
-    "Fast QR entry, name lookup, duplicate protection and event-day information designed to work when signal does not.",
+    "Online QR verification, name lookup and repeated-scan protection. Staff need a working internet connection; offline check-in is not supported.",
   ],
   [
     Images,
     "Memory Vault",
-    "Let guests contribute photos, videos and messages; approve them into a living archive after the day.",
+    "Organizers can upload, moderate and retrieve event media. Guest-contributed uploads and a shared guest gallery are not available yet.",
   ],
   [
     BarChart3,
     "Event Intelligence",
-    "Understand invitation views, replies, attendance, budgets and engagement without invasive tracking.",
+    "Review recorded replies, attendance and budget entries. Advanced event analytics are not part of the current workspace.",
   ],
   [
     ShieldCheck,
@@ -598,23 +598,24 @@ function Features() {
           <Zap />
           <h3>Performance-aware beauty</h3>
           <p>
-            Cinematic on capable devices. Light, quick and accessible everywhere
-            else.
+            Responsive layouts, route-based loading and reduced-motion styling.
+            A full device and accessibility review remains a launch requirement.
           </p>
         </div>
         <div>
           <WifiOff />
-          <h3>Ready when signal isn’t</h3>
+          <h3>Online-first operations</h3>
           <p>
-            Cached schedules, guest lists and check-in keep the event moving.
+            Check-in and organizer records require network access. Keep an
+            independent event-day contingency plan.
           </p>
         </div>
         <div>
           <Languages />
           <h3>Made for every guest</h3>
           <p>
-            Language, timezone, motion and accessibility adapt without losing
-            the design.
+            Choose an event timezone and occasion dates. Full interface
+            localization is not available yet.
           </p>
         </div>
       </section>
@@ -716,8 +717,9 @@ function Templates() {
           <i>Make it entirely yours.</i>
         </h1>
         <p>
-          Every template is a responsive experience system — not a flattened
-          card.
+          These are visual design concepts, not selectable or purchasable
+          templates. The current editor supports event details and text
+          sections.
         </p>
       </section>
       <section className="m-template-grid">
@@ -727,7 +729,7 @@ function Templates() {
               <div>
                 <img src={c[2]} alt="" />
                 <span>
-                  PREVIEW EXPERIENCE <ArrowUpRight />
+                  OPEN WORKSPACE <ArrowUpRight />
                 </span>
               </div>
               <small>{c[1]}</small>
@@ -741,96 +743,86 @@ function Templates() {
   );
 }
 function Pricing() {
+  const offerings = [
+    {
+      label: "PILOT WORKSPACE",
+      title: "The working core",
+      value: "Event tools",
+      detail: "Current capabilities, not a paid-plan entitlement.",
+      items: [
+        "Guest lists and personalized invitations",
+        "Assigned occasions and RSVP",
+        "Seating and online check-in",
+        "Account security and scoped privacy tools",
+      ],
+    },
+    {
+      label: "OPTIONAL INTEGRATIONS",
+      title: "Connected services",
+      value: "Provider costs",
+      detail:
+        "Requires approved provider accounts, configuration and acceptance testing.",
+      items: [
+        "Opt-in email, SMS and WhatsApp",
+        "NGN gifts and contributions via Paystack",
+        "Human-reviewed AI drafting",
+        "Provider charges are separate",
+      ],
+    },
+    {
+      label: "NOT YET AVAILABLE",
+      title: "The product roadmap",
+      value: "In planning",
+      detail: "No purchase or delivery-date promise for these features.",
+      items: [
+        "Paid plans and billing entitlements",
+        "Refund and settlement automation",
+        "Offline check-in and guest gallery",
+        "Advanced visual templates and localization",
+      ],
+    },
+  ];
   return (
     <div className="marketing m-inner">
       <Nav dark />
       <section className="m-inner-hero compact center">
-        <span className="m-kicker">SIMPLE, EVENT-FRIENDLY PRICING</span>
+        <span className="m-kicker">CURRENT AVAILABILITY</span>
         <h1>
-          Pay for the moment.
+          Know what works.
           <br />
-          <i>Not another subscription.</i>
+          <i>Plan with clarity.</i>
         </h1>
-        <p>Begin freely. Upgrade only when your event needs more.</p>
+        <p>
+          This implementation does not offer paid Invibox plans or an upgrade
+          checkout. Start with the available workflows and configure optional
+          providers only when ready.
+        </p>
       </section>
       <section className="m-pricing">
-        <div>
-          <span>ESSENTIAL</span>
-          <h3>Start beautifully</h3>
-          <b>Free</b>
-          <p>For a simple invitation and effortless replies.</p>
-          <A href="/app">
-            Start free <ArrowRight />
-          </A>
-          <ul>
-            {[
-              "One live event",
-              "Up to 50 guests",
-              "Beautiful responsive invite",
-              "Core RSVP and schedule",
-              "Invibox branding",
-            ].map((x) => (
-              <li>
-                <Check />
-                {x}
-              </li>
-            ))}
-          </ul>
-        </div>
-        <div className="featured">
-          <em>MOST LOVED</em>
-          <span>CELEBRATION</span>
-          <h3>The whole experience</h3>
-          <b>
-            <small>₦</small>35,000
-          </b>
-          <p>One-time payment for one extraordinary event.</p>
-          <A href="/app">
-            Create your event <ArrowRight />
-          </A>
-          <ul>
-            {[
-              "Up to 500 guests",
-              "Multi-occasion access",
-              "WhatsApp communication tools",
-              "Seating and check-in",
-              "Memory vault and analytics",
-              "Remove Invibox branding",
-            ].map((x) => (
-              <li>
-                <Check />
-                {x}
-              </li>
-            ))}
-          </ul>
-        </div>
-        <div>
-          <span>PROFESSIONAL</span>
-          <h3>For event people</h3>
-          <b>Let’s talk</b>
-          <p>For planners, venues and organizations.</p>
-          <a href="mailto:hello@invibox.app">
-            Talk to us <ArrowRight />
-          </a>
-          <ul>
-            {[
-              "Unlimited active events",
-              "Team roles and client workspaces",
-              "Brand kit and custom domain",
-              "Reusable templates",
-              "Priority support",
-            ].map((x) => (
-              <li>
-                <Check />
-                {x}
-              </li>
-            ))}
-          </ul>
-        </div>
+        {offerings.map((offer, i) => (
+          <div className={i === 1 ? "featured" : ""} key={offer.label}>
+            <span>{offer.label}</span>
+            <h3>{offer.title}</h3>
+            <b>{offer.value}</b>
+            <p>{offer.detail}</p>
+            <A href="/app">
+              Open workspace <ArrowRight />
+            </A>
+            <ul>
+              {offer.items.map((item) => (
+                <li key={item}>
+                  <Check />
+                  {item}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
       </section>
       <p className="m-price-note">
-        No guest sees an advert. Payment processing and message-provider usage
-        may carry separate transparent fees.
+        Payment processing and message-provider usage may incur external fees.
+        Guest contributions are not purchases of an Invibox plan. Public launch
+        requires an approved merchant, consent and operational policy.
       </p>
       <Footer />
     </div>
@@ -915,7 +907,10 @@ function Legal({ kind }: { kind: "privacy" | "terms" }) {
       <main className="m-legal">
         <span className="m-kicker">TRUST, WRITTEN CLEARLY</span>
         <h1>{privacy ? "Privacy" : "Terms of service"}</h1>
-        <p className="m-legal-date">Effective 17 September 2026</p>
+        <p className="m-legal-date">
+          Draft product policy — operator and legal approval required before
+          public launch.
+        </p>
         {privacy ? (
           <>
             <section>
@@ -939,19 +934,22 @@ function Legal({ kind }: { kind: "privacy" | "terms" }) {
             <section>
               <h2>Your choices</h2>
               <p>
-                Organizers may export, correct and request deletion of event
-                data. Guests may ask the organizer or Invibox to correct or
-                remove their personal information. Private invitations are
-                excluded from search indexing by default.
+                Organizers can export their data and use scoped deletion
+                controls. Guests can change event-message preferences from their
+                personal invitation or unsubscribe from an update; they can ask
+                their organizer to correct or erase their guest record. Private
+                invitations are excluded from indexing by default.
               </p>
             </section>
             <section>
               <h2>Security and retention</h2>
               <p>
                 We use encrypted transport, hashed credentials and access
-                tokens, role-based authorization and auditable operations. Data
-                is retained only for the event service and archive period
-                selected by the organizer, subject to legal obligations.
+                tokens, role-based authorization and auditable operations.
+                Scoped account/event export and erasure tools are available.
+                Financial records can block automatic deletion; provider and
+                backup retention requires a separate operator-reviewed policy.
+                Configurable archive-retention periods are not implemented.
               </p>
             </section>
           </>
@@ -977,9 +975,9 @@ function Legal({ kind }: { kind: "privacy" | "terms" }) {
             <section>
               <h2>Payments and providers</h2>
               <p>
-                Paid plans, messaging and payment processing may rely on
-                third-party providers with disclosed fees and terms.
-                Availability can vary by region and provider approval.
+                Messaging and payment processing rely on third-party providers
+                with disclosed fees and terms. Availability can vary by region
+                and provider approval.
               </p>
             </section>
             <section>
@@ -1020,11 +1018,11 @@ export default function Marketing() {
       ],
       "/templates": [
         "Invitation experience templates — Invibox",
-        "Art-directed, responsive digital invitation templates made for every culture and every kind of event.",
+        "Visual design concepts for inspiration. Selectable visual templates are not part of the current editor.",
       ],
       "/pricing": [
-        "Pricing — Invibox",
-        "Simple event-friendly pricing. Start free and upgrade once for the features your celebration needs.",
+        "Availability and provider costs — Invibox",
+        "Current pilot capabilities, optional provider integrations and clearly identified roadmap features. No paid plan checkout is offered.",
       ],
       "/about": [
         "Our story — Invibox",

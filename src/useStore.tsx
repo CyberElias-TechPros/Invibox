@@ -55,7 +55,12 @@ export type VendorRecord = {
   payment_status: "due" | "part_paid" | "paid";
 };
 type Store = {
-  user: { id: string; name: string; email: string } | null;
+  user: {
+    id: string;
+    name: string;
+    email: string;
+    emailVerifiedAt?: string | null;
+  } | null;
   analytics: Record<string, number>;
   media: MediaRecord[];
   seating: SeatingRecord[];
@@ -95,6 +100,7 @@ export function EventStoreProvider({ children }: { children: ReactNode }) {
     id: string;
     name: string;
     email: string;
+    emailVerifiedAt?: string | null;
   } | null>(null);
   const [sections, rawSections] = useState<string[]>([]);
   const [guests, rawGuests] = useState<Guest[]>([]);

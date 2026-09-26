@@ -4,7 +4,17 @@
 
 **Substantial security and workflow hardening is implemented; this is not a certification that the entire original SaaS vision is production-complete.** Credentials alone do not complete every advertised use case. Launch a defined, limited event-management pilot only after staging acceptance and the release gates below. Do not sell unfinished modules as working products.
 
-## What this pass corrected
+## Additional workflows completed in the follow-up
+
+- **Account & security:** explicit email verification with expiry/cooldown, production verification gates, active-session listing/revocation, password-confirmed revoke-others and password change, versioned authentication, and transactional reset replay protection. Available at `/app/account`, including accounts with no events.
+- **Privacy:** password-confirmed account/event JSON exports; owner guest erasure; archived nonfinancial event deletion; account deactivation/anonymization with membership/session removal; durable referenced-R2 deletion jobs. Database triggers reject nonarchived or financially retained event deletion and roll back the entire transaction. These flows do not erase backups, provider records or unrelated owners' event content.
+- **Payments:** required payload-bound idempotency keys, one provider initialization per reserved intent, ambiguous-timeout recovery without creating a second charge, browser retry state, organizer ledger/CSV, manual reconciliation and bounded periodic reconciliation. Final state is checked again before returning checkout after initialization.
+- **Guest pass:** QR PNG generated locally from the invitation token, download/copy, revocation on token rotation. Staff verification remains online-only.
+- **Messaging consent:** per-channel guest opt-ins default off, preferences independent of RSVP, signed opt-out-only unsubscribe links, opt-in checks at enqueue and immediately before provider submission, skipped-recipient reporting, and consent reset when contact details change. Stores current preferences and last-change time, not a complete historical legal-consent audit.
+- **Public claims:** unsupported paid-plan prices/entitlements were replaced with availability/provider-cost information; offline, guest gallery, visual template and localization limitations are explicit. Policy pages are marked draft pending operator/legal approval.
+- **Frontend loading:** public invitation, marketing, account and preference modules are lazy-loaded; account/privacy/payment controls have real API/error/loading paths.
+
+## What the original hardening pass corrected
 
 | Area | Previous problem | Implemented behavior |
 |---|---|---|
@@ -30,22 +40,22 @@
 
 ## Supported stories and their order
 
-1. **Organizer:** register/sign in → create event with date/location/timezone → add public/private occasions → add/import guests → assign private occasion access → edit invitation content → preview → publish → distribute individual private links. Publication before a schedule fails explicitly.
+1. **Organizer:** register/sign in → request/confirm verification from Account & security (required outside development) → create event with date/location/timezone → add public/private occasions → add/import guests → assign private occasion access → edit invitation content → preview → publish → distribute individual private links. Publication before a schedule fails explicitly.
 2. **Guest:** open personalized link → view only assigned occasions → choose each response → optionally add dietary/accessibility notes and companion name within allocation → submit → retry the same payload safely. Invalid/revoked tokens expose no event data.
 3. **Collaborator:** receive email-bound invitation → register/sign in as the invited email → accept before expiry → see role-scoped workspace. Acceptance runs before first-event onboarding. Owner can remove access; admins/owners can revoke pending invitations.
 4. **Event-day staff:** sign in → select assigned event → scan token or search guest → persist check-in → refresh status. Concurrent repeated scans report an existing check-in. **Network access is required.**
-5. **Communications:** configure approved provider → enter actual guest contacts → select audience → enqueue transactionally → provider attempts/retries → inspect accepted/failed counts → deliberately retry failures. “Sent” in the database means **provider accepted**, not delivered/read.
-6. **Gifting:** organizer enables gifting → guest submits receipt email and amount → hosted Paystack checkout → verified webhook/status lookup → paid confirmation. Invitation tokens are not sent to the payment provider in callback URLs. Test the flow on the same browser; returning in another browser requires the original private link.
+5. **Communications:** configure approved provider → enter actual guest contacts → guests opt in through their personal invitation → select audience → enqueue transactionally → provider attempts/retries → inspect accepted/failed counts → deliberately retry failures. Delivery-row “sent” means **provider accepted**, not delivered/read; announcement “sent” means processing completed without failures and can include suppressed recipients. The UI shows accepted, failed and skipped counts.
+6. **Gifting:** organizer enables gifting → guest submits receipt email and amount with a persisted intent key → hosted Paystack checkout → verified webhook/status lookup → paid confirmation. Invitation tokens are not sent to the payment provider in callback URLs. Test the flow on the same browser; returning in another browser requires the original private link.
 7. **Organizer media:** authorized upload → signature validation → R2 storage → moderation → authorized retrieval. This is not yet a full guest-upload gallery product.
-8. **Completion:** live structural edits lock → mark completed → review read-only operational records → archive. Final financial/retention actions remain operator-controlled.
+8. **Completion:** live structural edits lock → mark completed → review read-only operational records → archive. Owner may export data, erase guest-linked data, or delete an archived event without payment records. Financial retention exceptions remain operator-reviewed.
 
 ## Verified in this workspace
 
-- 38 Vitest unit/HTTP/provider tests.
-- 4 SQLite-backed Worker tests: same-day expiry, reset/team expiry, queue retries/deduplication/frozen audience, signed payment webhook validation/replay.
+- 41 Vitest unit/HTTP/provider/browser-retry-state tests.
+- 19 SQLite-backed Worker tests: expiry, queue retries/suppression, payment webhooks/initialization races, verification, sessions/password/reset replay, exports, privacy erasure and financial-retention rollback.
 - 65 real local Worker/D1 API regression checks.
 - Full-stack smoke: register → create → schedule → publish → token → RSVP/replay → seat → check-in → R2 upload/moderation/retrieval.
-- 2 Chromium browser tests: real organizer content publication and private guest RSVP; no silent demo authentication.
+- 6 Chromium browser tests: organizer publication; private mobile guest RSVP/QR/preferences; no silent demo authentication; account verification/export/password changes; event privacy; account deletion; mocked-provider checkout retries and reload recovery (the first browser test covers multiple connected stories).
 - TypeScript checks, production frontend build, Wrangler dry-run, local forward migrations and dependency audit.
 
 Browser tests used an external cached Chromium binary because the default browser CDN was unreachable in this sandbox. No browser binary or test data is committed. CI uses Playwright's standard installation.
@@ -54,11 +64,11 @@ Browser tests used an external cached Chromium binary because the default browse
 
 These are explicit scope gaps, not claims of completion:
 
-- **Public paid SaaS:** email verification, stronger account-abuse controls (e.g. Turnstile), MFA/session-device management, organization ownership transfer, subscription billing, enforced entitlements and quotas, platform administration and support workflows.
-- **Money:** checkout initialization idempotency/recovery, organizer payment ledger UI, refund/dispute workflows, reconciliation jobs, merchant/subaccount settlement policy, ticket inventory/capacity and receipt/tax requirements. Current implementation is NGN gifts/contributions to the configured merchant, not multi-organizer payout infrastructure.
-- **Messaging:** signed delivery/bounce/read callbacks, opt-in/opt-out/suppression policy and UI, attachment/template management, scheduled sends. SMS/WhatsApp may duplicate after an ambiguous provider timeout or crash; exactly-once external delivery is not promised. Large campaigns need load/subrequest-limit testing and quota enforcement.
-- **Privacy:** self-service account/event export and erasure across D1/R2, configurable retention by data category, audit review UI and a legally approved consent/privacy/terms policy. Analytics currently purge after 90 days; other business data needs a defined retention policy.
-- **Guests/media:** guest upload consent/moderation/gallery flow, reliable generated QR passes, plus-one/household editing beyond reserved party size, transport bookings, accommodation inventory, registry fulfillment, waitlists and ticketed event capacity.
+- **Public paid SaaS:** stronger account-abuse controls (e.g. Turnstile), MFA, richer session device attribution, organization ownership transfer, subscription billing, enforced entitlements and quotas, platform administration and support workflows.
+- **Money:** refund/dispute workflows, full merchant accounting and long-tail reconciliation, merchant/subaccount settlement policy, ticket inventory/capacity and receipt/tax requirements. Current implementation is NGN gifts/contributions to the configured merchant, not multi-organizer payout infrastructure.
+- **Messaging:** signed delivery/bounce/read callbacks, provider-side bounce/complaint suppression, jurisdiction-specific consent evidence/retention policy, standards-based mail one-click unsubscribe headers, attachment/template management, scheduled sends. SMS/WhatsApp may duplicate after an ambiguous provider timeout or crash; exactly-once external delivery is not promised. Large campaigns need load/subrequest-limit testing and quota enforcement.
+- **Privacy:** cross-provider/backups data-rights fulfillment, configurable retention by data category, audit review UI and a legally approved consent/privacy/terms policy. Analytics currently purge after 90 days; other business data needs a defined retention policy.
+- **Guests/media:** guest upload consent/moderation/gallery flow, plus-one/household editing beyond reserved party size, transport bookings, accommodation inventory, registry fulfillment, waitlists and ticketed event capacity.
 - **Experience:** full visual theme/template/media editing, SEO rendering for public pages, complete localization, richer calendar/timezone editing, accessibility audit and browser/device matrix. The editor saves text content, not arbitrary page design.
 - **Reliability/scale:** real offline conflict-resolving check-in, paginated large-event workspace (current snapshot is bounded bulk editing, not infinite scale), load testing, provider sandbox acceptance, monitored backup restores, production alert routing and security review.
 - **Editor limitations:** content edits require explicit Save before internal navigation; browser-close warnings do not provide a full route blocker. Other collection changes use serialized server writes, not an offline durable job queue.

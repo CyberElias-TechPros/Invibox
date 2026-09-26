@@ -26,6 +26,70 @@ async function request<T>(path: string, init: RequestInit = {}) {
   return data as T;
 }
 export const api = {
+  savePreferences: (
+    token: string,
+    preferences: { email: boolean; sms: boolean; whatsapp: boolean },
+  ) =>
+    request("/public/preferences", {
+      method: "POST",
+      body: JSON.stringify({ token, ...preferences }),
+    }),
+  unsubscribe: (body: { guest: string; channel: string; signature: string }) =>
+    request<{ message: string }>("/public/unsubscribe", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  requestVerification: () =>
+    request<any>("/auth/email/request", { method: "POST" }),
+  verifyEmail: (token: string) =>
+    request("/auth/email/verify", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    }),
+  sessions: () => request<{ sessions: any[] }>("/account/sessions"),
+  revokeSession: (id: string) =>
+    request(`/account/sessions/${id}`, { method: "DELETE" }),
+  revokeOtherSessions: (password: string) =>
+    request("/account/sessions/revoke-others", {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    }),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request("/account/password", {
+      method: "POST",
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
+  deleteAccount: (password: string, confirmation: string) =>
+    request("/account/delete", {
+      method: "POST",
+      body: JSON.stringify({ password, confirmation }),
+    }),
+  exportAccount: (password: string) =>
+    request<any>("/account/export", {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    }),
+  exportEvent: (id: string, password: string) =>
+    request<any>(`/events/${id}/export`, {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    }),
+  eraseGuest: (id: string, guestId: string, password: string) =>
+    request<any>(`/events/${id}/erase-guest/${guestId}`, {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    }),
+  deleteEvent: (id: string, password: string, confirmation: string) =>
+    request(`/events/${id}/delete`, {
+      method: "POST",
+      body: JSON.stringify({ password, confirmation }),
+    }),
+  payments: (id: string) => request<any>(`/events/${id}/payments`),
+  reconcilePayment: (id: string, reference: string) =>
+    request(
+      `/events/${id}/payments/${encodeURIComponent(reference)}/reconcile`,
+      { method: "POST" },
+    ),
   bootstrap: () =>
     request<{ eventId: string; guestToken: string }>("/demo/bootstrap", {
       method: "POST",
@@ -210,17 +274,26 @@ export const api = {
       headers: { "Idempotency-Key": key },
       body: JSON.stringify(body),
     }),
-  initializePayment: (body: {
-    slug: string;
-    token?: string;
-    email: string;
-    amount: number;
-    purpose: string;
-  }) =>
-    request<{ checkoutUrl: string; reference: string }>(
-      "/public/payments/paystack/initialize",
-      { method: "POST", body: JSON.stringify(body) },
-    ),
+  initializePayment: (
+    body: {
+      slug: string;
+      token?: string;
+      email: string;
+      amount: number;
+      purpose: string;
+    },
+    key: string,
+  ) =>
+    request<{
+      checkoutUrl?: string;
+      reference: string;
+      status: string;
+      message?: string;
+    }>("/public/payments/paystack/initialize", {
+      method: "POST",
+      headers: { "Idempotency-Key": key },
+      body: JSON.stringify(body),
+    }),
   paymentStatus: (reference: string) =>
     request<{ status: string; amount: number; purpose: string }>(
       `/public/payments/${encodeURIComponent(reference)}`,

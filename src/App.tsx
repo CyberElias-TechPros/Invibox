@@ -1,10 +1,19 @@
+import EventPrivacy from "./EventPrivacy";
+import PaymentsPanel from "./PaymentsPanel";
 import { AnnouncementHistory } from "./AnnouncementHistory";
 import { GuestAccess } from "./GuestAccess";
 import ExperienceEditor from "./ExperienceEditor";
-import PublicInvite from "./PublicInvite";
+
 import { calendar, download, csvCell, parseCsv } from "./files";
 import { TeamPanel } from "./TeamPanel";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  lazy,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   LayoutDashboard,
@@ -80,7 +89,18 @@ import type { PageKey, Guest, GuestStatus } from "./types";
 import { budget } from "./data";
 import { EventStoreProvider, useEventStore } from "./useStore";
 import { api } from "./api";
-import Marketing from "./Marketing";
+
+const PublicInvite = lazy(() => import("./PublicInvite"));
+const Marketing = lazy(() => import("./Marketing"));
+const AccountPage = lazy(() => import("./AccountPage"));
+const VerifyEmail = lazy(() =>
+  import("./AccountPage").then((module) => ({ default: module.VerifyEmail })),
+);
+const Unsubscribe = lazy(() =>
+  import("./CommunicationPreferences").then((module) => ({
+    default: module.Unsubscribe,
+  })),
+);
 
 const nav: [PageKey, string, any][] = [
   ["overview", "Overview", LayoutDashboard],
@@ -283,6 +303,9 @@ function Sidebar({
           ))}
       </nav>
       <div className="sidebar-bottom">
+        <a className="help-link" href="/app/account">
+          Account & security
+        </a>
         <a className="help-link" href="mailto:help@invibox.app">
           <CircleHelp size={18} />
           Help centre
@@ -1520,16 +1543,27 @@ function Seating({ notify }: { notify: (s: string) => void }) {
 
 function Messages({ notify }: { notify: (s: string) => void }) {
   const { eventId, event, guests } = useEventStore();
-  const pendingCount = guests
-    .filter((g) => g.status === "Pending")
-    .reduce((n, g) => n + g.party, 0);
-  const attendingCount = guests
-    .filter((g) => g.status === "Attending")
-    .reduce((n, g) => n + g.party, 0);
+  const pendingCount = guests.filter((g) => g.status === "Pending").length;
+  const attendingCount = guests.filter((g) => g.status === "Attending").length;
   const [sending, setSending] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
   const [audience, setAudience] = useState("pending");
   const [channel, setChannel] = useState("WhatsApp");
+  const eligibleCount = guests.filter(
+    (g) =>
+      Boolean(
+        g[
+          `${channel.toLowerCase()}_opt_in` as
+            | "email_opt_in"
+            | "sms_opt_in"
+            | "whatsapp_opt_in"
+        ],
+      ) &&
+      (audience === "all" ||
+        (audience === "pending" && g.status === "Pending") ||
+        (audience === "attending" && g.status === "Attending") ||
+        (audience === "vip" && g.group === "VIP")),
+  ).length;
   const [text, setText] = useState(
     `Hello {{first_name}}, ${event?.title || "our celebration"} is almost here! Please confirm your attendance and view the latest details below.`,
   );
@@ -1583,7 +1617,11 @@ function Messages({ notify }: { notify: (s: string) => void }) {
       <div className="message-layout">
         <section className="card composer">
           <h3>Create announcement</h3>
-          <p>Send an update to a guest segment</p>
+          <p>
+            Only guests who opted in to the selected channel are eligible.
+            Guests can manage preferences from their invitation; having a
+            contact address alone is not consent.
+          </p>
           <label>
             Channel
             <div className="channel-tabs">
@@ -1603,6 +1641,11 @@ function Messages({ notify }: { notify: (s: string) => void }) {
               ))}
             </div>
           </label>
+          <p>
+            {eligibleCount} guest records currently opted in for this channel
+            and audience. Unsubscribe links are added automatically; SMS may
+            span multiple billable segments.
+          </p>
           <label>
             Recipients
             <select
@@ -1636,7 +1679,7 @@ function Messages({ notify }: { notify: (s: string) => void }) {
             <button
               onClick={() =>
                 setText(
-                  "Hello {{first_name}}, a gentle reminder to RSVP for our celebration by 1 November. We hope you can join us!",
+                  "Hello {{first_name}}, a gentle reminder to RSVP for our celebration. Please check your invitation for the latest details and response deadline. We hope you can join us!",
                 )
               }
             >
@@ -1687,7 +1730,7 @@ function Messages({ notify }: { notify: (s: string) => void }) {
             }}
           >
             <Send size={16} />
-            {sending ? "Queueing…" : "Review & send"}
+            {sending ? "Queueing…" : "Queue update"}
           </button>
         </section>
         <aside className="phone-preview">
@@ -2936,6 +2979,8 @@ function SettingsPage({ notify }: { notify: (s: string) => void }) {
           <TeamPanel eventId={eventId} notify={notify} />
         </section>
       </div>
+      <PaymentsPanel eventId={eventId} />
+      <EventPrivacy />
     </div>
   );
 }
@@ -3134,7 +3179,7 @@ function NewEvent({
 
 function AppShell() {
   if (location.pathname.startsWith("/invite/")) return <PublicInvite />;
-  const { event, createFirst, error, saving, refresh } = useEventStore();
+  const { event, user, createFirst, error, saving, refresh } = useEventStore();
   const [page, setPage] = useState<PageKey>("overview");
   const [mobile, setMobile] = useState(false);
   const [newEvent, setNewEvent] = useState(false);
@@ -3212,6 +3257,12 @@ function AppShell() {
             window.open(`/invite/${event?.slug}?preview=${event?.id}`, "_blank")
           }
         />
+        {user && !user.emailVerifiedAt && (
+          <div className="save-banner">
+            Verify your email to unlock publishing and integrations in
+            production. <a href="/app/account">Account & verification</a>
+          </div>
+        )}
         {saving && (
           <div className="save-banner" role="status">
             Saving changes… Please keep this page open.
@@ -3512,6 +3563,7 @@ function AccessPortal() {
         </main>
       </div>
     );
+  if (location.pathname === "/app/account") return <AccountPage />;
   if (phase === "onboarding") return <FirstEvent onCreate={createFirst} />;
   return <AppShell />;
 }
@@ -3534,6 +3586,7 @@ function FirstEvent({
         <b>invibox</b>
       </div>
       <main>
+        <a href="/app/account">Account security & email verification</a>
         <span className="eyebrow">YOUR FIRST EXPERIENCE</span>
         <h1>
           What are we
@@ -3607,6 +3660,9 @@ function FirstEvent({
 }
 export default function App() {
   const path = location.pathname;
+  if (path === "/unsubscribe") return <Unsubscribe />;
+  const verify = new URLSearchParams(location.search).get("verify");
+  if (path.startsWith("/app") && verify) return <VerifyEmail token={verify} />;
   if (path.startsWith("/invite/")) return <PublicInvite />;
   if (path === "/app" || path.startsWith("/app/"))
     return (

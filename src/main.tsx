@@ -9,7 +9,15 @@ import "./marketing.css";
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <ErrorBoundary>
-      <App />
+      <React.Suspense
+        fallback={
+          <main className="invite-error" role="status">
+            Loading Invibox…
+          </main>
+        }
+      >
+        <App />
+      </React.Suspense>
     </ErrorBoundary>
   </React.StrictMode>,
 );

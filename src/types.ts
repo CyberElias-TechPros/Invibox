@@ -4,6 +4,9 @@ export interface Guest {
   name: string;
   email?: string;
   phone?: string;
+  email_opt_in?: number;
+  sms_opt_in?: number;
+  whatsapp_opt_in?: number;
   initials: string;
   group: string;
   status: GuestStatus;

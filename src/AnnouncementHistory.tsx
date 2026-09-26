@@ -32,11 +32,12 @@ export function AnnouncementHistory({ eventId }: { eventId: string }) {
       {rows.map((row) => (
         <div key={row.id}>
           <b>
-            {row.channel} · {row.status}
+            {row.channel} · {row.status === "sent" ? "processed" : row.status}
           </b>
           <p>{row.message}</p>
           <small>
-            {row.sent_count || 0} accepted · {row.failed_count || 0} failed
+            {row.sent_count || 0} accepted · {row.failed_count || 0} failed ·{" "}
+            {row.skipped_count || 0} skipped
           </small>
           {row.status === "failed" && (
             <button

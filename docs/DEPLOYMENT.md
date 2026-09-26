@@ -76,7 +76,7 @@ npx wrangler secret put AI_API_KEY --config wrangler.production.toml
 npx wrangler secret put PAYSTACK_SECRET_KEY --config wrangler.production.toml
 ```
 
-`SESSION_PEPPER` must be cryptographically random, at least 32 characters, stored in a secret manager; rotation invalidates existing sessions. Production requests fail closed if the pepper is missing/short, demo is enabled, or `APP_ORIGIN` is not HTTPS.
+`SESSION_PEPPER` must be cryptographically random, at least 32 characters, stored in a secret manager; rotation invalidates existing sessions and signed unsubscribe links (see the operations runbook). Production requests fail closed if the pepper is missing/short, demo is enabled, or `APP_ORIGIN` is not HTTPS.
 
 | Service | Additional configuration and approval |
 |---|---|
@@ -115,3 +115,9 @@ Never deploy the development `wrangler.toml` to production. Never run developmen
 9. Configure alerts/backup restore drill and approve [release gates](READINESS.md#release-gates).
 
 Roll back only to a schema-compatible Worker/frontend pair. Repair schema forward; do not reverse production migrations destructively. Old bulk-sync clients must not bypass the new version preconditions.
+
+## Follow-up rollout and acceptance
+
+Apply all migrations through `0010_communication_preferences.sql` before deploying this release. Migration 0010 defaults every guest/channel to opted out; imported contacts are not presumed to have consent. Distribute personal invitation links, then let guests choose preferences. Account verification is now required outside development before publishing or using paid integrations; existing organizers request a link from `/app/account` after email delivery has been configured.
+
+Include verification expiry/replay, session revocation/password changes, privacy financial-retention rollback, R2 deletion recovery, guest QR revocation, opt-out suppression, payment initialization timeouts and ledger reconciliation in staging acceptance. Test `/app/account` and `/unsubscribe` through the deployed frontend rewrites. Never run destructive fixture tests against production. Add provider keys only in the secret manager; no live provider acceptance or public deployment was performed in this workspace.

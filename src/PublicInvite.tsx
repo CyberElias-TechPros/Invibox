@@ -1,3 +1,7 @@
+import CommunicationPreferences from "./CommunicationPreferences";
+import GuestPass from "./GuestPass";
+import { reservePaymentAttempt } from "./paymentAttempt";
+import { ApiError } from "./api";
 import { useEffect, useRef, useState } from "react";
 import { CalendarPlus, Check, Gift, MapPin, ArrowUpRight } from "lucide-react";
 import { api } from "./api";
@@ -27,6 +31,9 @@ type Invitation = {
     party_size: number;
     status: string;
     table_name?: string;
+    email_opt_in?: number;
+    sms_opt_in?: number;
+    whatsapp_opt_in?: number;
   };
   occasions: Occasion[];
   sections: { title: string; type: string; content_json: string }[];
@@ -37,6 +44,8 @@ export default function PublicInvite() {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [paymentBusy, setPaymentBusy] = useState(false);
+  const [canStartAnother, setCanStartAnother] = useState(false);
+  const [paymentReference, setPaymentReference] = useState("");
   const [choices, setChoices] = useState<Record<string, string>>({});
   const [notes, setNotes] = useState("");
   const [plusOne, setPlusOne] = useState("");
@@ -54,10 +63,50 @@ export default function PublicInvite() {
   useEffect(() => {
     let active = true;
     document.title = "Your invitation · Invibox";
+    const loadPayment = (reference: string) => {
+      if (reference) setPaymentReference(reference);
+      if (reference)
+        api
+          .paymentStatus(reference)
+          .then((result) => {
+            if (active) {
+              setCanStartAnother(
+                ["paid", "failed", "refunded"].includes(result.status),
+              );
+              setMessage(
+                result.status === "paid"
+                  ? "Thank you — your contribution was received."
+                  : `Payment status: ${result.status}. Refresh to check again.`,
+              );
+            }
+          })
+          .catch(() => {
+            if (active)
+              setMessage(
+                "Payment confirmation is not available yet. Please keep your provider receipt.",
+              );
+          });
+    };
     (preview ? api.previewEvent(preview) : api.publicEvent(slug, token))
       .then((result) => {
         if (!active) return;
         setData(result);
+        if (!preview && !params.get("payment")) {
+          try {
+            const saved = JSON.parse(
+              sessionStorage.getItem(
+                `invibox.payment.${result.event.id}.${token}`,
+              ) || "null",
+            );
+            if (typeof saved?.reference === "string")
+              loadPayment(saved.reference);
+          } catch {
+            setMessage(
+              "Saved checkout state could not be read. Contact the organizer before attempting another contribution.",
+            );
+          }
+        }
+
         document.title = `${result.event.title} · Invibox`;
         setChoices(
           Object.fromEntries(
@@ -78,23 +127,7 @@ export default function PublicInvite() {
         if (active) setError(e.message);
       });
     const reference = params.get("payment");
-    if (reference)
-      api
-        .paymentStatus(reference)
-        .then((result) => {
-          if (active)
-            setMessage(
-              result.status === "paid"
-                ? "Thank you — your contribution was received."
-                : `Payment status: ${result.status}. Refresh to check again.`,
-            );
-        })
-        .catch(() => {
-          if (active)
-            setMessage(
-              "Payment confirmation is not available yet. Please keep your provider receipt.",
-            );
-        });
+    if (reference) loadPayment(reference);
     return () => {
       active = false;
     };
@@ -298,6 +331,12 @@ export default function PublicInvite() {
           </p>
         )}
       </section>
+      {guest && token && !preview && (
+        <CommunicationPreferences token={token} guest={guest} />
+      )}
+      {guest && token && !preview && (
+        <GuestPass token={token} name={guest.name} slug={slug} />
+      )}
       {!preview && event.settings.capabilities?.includes("gifts") && (
         <section className="invite-rsvp gift-contribution">
           <Gift />
@@ -306,6 +345,56 @@ export default function PublicInvite() {
             Your presence is enough. Contributions are optional and processed
             securely by Paystack.
           </p>
+          {paymentReference && (
+            <p>
+              Reference: {paymentReference}{" "}
+              <button
+                disabled={paymentBusy}
+                onClick={async () => {
+                  setPaymentBusy(true);
+                  try {
+                    const result = await api.paymentStatus(paymentReference);
+                    setCanStartAnother(
+                      ["paid", "failed", "refunded"].includes(result.status),
+                    );
+                    setMessage(
+                      `Payment status: ${result.status}. Reference: ${paymentReference}`,
+                    );
+                  } catch (e) {
+                    setMessage(
+                      e instanceof Error ? e.message : "Could not verify",
+                    );
+                  } finally {
+                    setPaymentBusy(false);
+                  }
+                }}
+              >
+                Check status
+              </button>
+            </p>
+          )}
+          {canStartAnother && (
+            <button
+              onClick={() => {
+                if (
+                  !confirm(
+                    "Start a separate contribution? Only continue if your previous attempt has a confirmed final status.",
+                  )
+                )
+                  return;
+                sessionStorage.removeItem(
+                  `invibox.payment.${event.id}.${token}`,
+                );
+                setCanStartAnother(false);
+                setPaymentReference("");
+                setMessage(
+                  "You can now enter details for a separate contribution.",
+                );
+              }}
+            >
+              Start another contribution
+            </button>
+          )}
           <form
             className="invite-form"
             onSubmit={async (e) => {
@@ -313,15 +402,44 @@ export default function PublicInvite() {
               const form = new FormData(e.currentTarget);
               setPaymentBusy(true);
               try {
-                const result = await api.initializePayment({
+                const body = {
                   slug,
                   token: token || undefined,
-                  email: String(form.get("email")),
+                  email: String(form.get("email")).toLowerCase(),
                   amount: Number(form.get("amount")),
                   purpose: "contribution",
-                });
-                window.location.assign(result.checkoutUrl);
+                };
+                const attemptName = `invibox.payment.${event.id}.${token}`;
+                const attempt = await reservePaymentAttempt(
+                  sessionStorage,
+                  attemptName,
+                  body,
+                );
+                const result = await api.initializePayment(body, attempt.key);
+                sessionStorage.setItem(
+                  attemptName,
+                  JSON.stringify({
+                    ...attempt,
+                    reference: result.reference,
+                    status: result.status,
+                  }),
+                );
+                setPaymentReference(result.reference);
+                setCanStartAnother(
+                  ["paid", "failed", "refunded"].includes(result.status),
+                );
+                if (result.checkoutUrl) {
+                  window.location.assign(result.checkoutUrl);
+                  return;
+                }
+                setMessage(
+                  `${result.message || "Payment status: " + result.status} Reference: ${result.reference}`,
+                );
+                setPaymentBusy(false);
+                document.getElementById("rsvp")?.scrollIntoView();
               } catch (e) {
+                if (e instanceof ApiError && e.status === 422)
+                  setCanStartAnother(true);
                 setMessage(
                   e instanceof Error ? e.message : "Checkout unavailable",
                 );
