@@ -1,3 +1,4 @@
+import { confirmNavigation } from "./unsaved";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 import type { Guest, ScheduleItem } from "./types";
@@ -22,6 +23,7 @@ export type EventRecord = {
   theme_json?: string;
 };
 export type MediaRecord = {
+  share_with_guests: number;
   id: string;
   mime_type: string;
   size_bytes: number;
@@ -83,7 +85,7 @@ type Store = {
   authenticate: (
     mode: "login" | "register",
     data: { name?: string; email: string; password: string },
-  ) => Promise<void>;
+  ) => Promise<string | undefined>;
   createFirst: (data: {
     title: string;
     eventType: string;
@@ -216,8 +218,10 @@ export function EventStoreProvider({ children }: { children: ReactNode }) {
   ) => {
     setError(null);
     try {
-      if (mode === "login") await api.login(data.email, data.password);
-      else await api.register(data.name || "", data.email, data.password);
+      if (mode === "login") {
+        const result = await api.login(data.email, data.password);
+        if (result.mfaRequired) return result.challengeToken;
+      } else await api.register(data.name || "", data.email, data.password);
       await loadAccount();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Authentication failed");
@@ -230,6 +234,7 @@ export function EventStoreProvider({ children }: { children: ReactNode }) {
     date: string;
     location: string;
   }) => {
+    if (!confirmNavigation()) return;
     const result = await api.createEvent({
       ...data,
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -238,6 +243,7 @@ export function EventStoreProvider({ children }: { children: ReactNode }) {
     await load(result.event.id);
   };
   const logout = async () => {
+    if (!confirmNavigation()) return;
     await queue.current;
     await api.logout();
     setUser(null);
@@ -263,6 +269,7 @@ export function EventStoreProvider({ children }: { children: ReactNode }) {
     setOnline(false);
   };
   const switchEvent = async (id: string) => {
+    if (!confirmNavigation()) return;
     if (id === eventId) return;
     await queue.current;
     if (

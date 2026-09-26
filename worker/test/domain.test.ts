@@ -88,3 +88,15 @@ describe("payment verification", () => {
     expect(constantTimeEqual("abcd", "abcd0")).toBe(false);
   });
 });
+
+it("restricts consent history to owners and administrators", () => {
+  expect(canAccess("owner", "GET", "/consents")).toBe(true);
+  expect(canAccess("admin", "GET", "/consents")).toBe(true);
+  for (const role of [
+    "viewer",
+    "designer",
+    "guest_manager",
+    "checkin_staff",
+  ] as const)
+    expect(canAccess(role, "GET", "/consents")).toBe(false);
+});

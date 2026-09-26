@@ -1,3 +1,4 @@
+import { registerUnsavedEditor } from "./unsaved";
 import { useEffect, useState } from "react";
 import { ArrowDown, ArrowUp, Eye, Plus, Save, Trash2 } from "lucide-react";
 import { api } from "./api";
@@ -52,6 +53,9 @@ export default function ExperienceEditor({
     };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
+  useEffect(() => {
+    if (dirty) return registerUnsavedEditor();
   }, [dirty]);
   const change = (next: Section[]) => {
     setSections(next);

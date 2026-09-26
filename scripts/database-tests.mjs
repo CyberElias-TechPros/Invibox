@@ -1082,3 +1082,447 @@ test("simultaneous payment requests share a reservation and webhook confirmation
     DB.sqlite.close();
   }
 });
+
+async function authenticatorCode(secret) {
+  const { createHmac } = await import("node:crypto");
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let bits = 0,
+    value = 0;
+  const bytes = [];
+  for (const char of secret) {
+    value = (value << 5) | alphabet.indexOf(char);
+    bits += 5;
+    if (bits >= 8) {
+      bytes.push((value >>> (bits - 8)) & 255);
+      bits -= 8;
+    }
+  }
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30000)));
+  const digest = createHmac("sha1", Buffer.from(bytes))
+    .update(counter)
+    .digest();
+  const offset = digest[19] & 15;
+  return String((digest.readUInt32BE(offset) & 0x7fffffff) % 1000000).padStart(
+    6,
+    "0",
+  );
+}
+async function enrolledOwner() {
+  const fixture = await ownerFixture();
+  const setup = await call(
+    fixture.env,
+    "/account/mfa/setup",
+    { password: "Strong-Owner-2026!" },
+    fixture.cookie,
+  );
+  assert.equal(setup.status, 200);
+  const { secret } = await setup.json();
+  const enable = await call(
+    fixture.env,
+    "/account/mfa/enable",
+    { password: "Strong-Owner-2026!", code: await authenticatorCode(secret) },
+    fixture.cookie,
+  );
+  assert.equal(enable.status, 200);
+  return { ...fixture, secret, codes: (await enable.json()).recoveryCodes };
+}
+async function challenge(env) {
+  const login = await call(env, "/auth/login", {
+    email: "owner@example.com",
+    password: "Strong-Owner-2026!",
+  });
+  assert.equal(login.status, 200);
+  const result = await login.json();
+  assert.equal(result.mfaRequired, true);
+  assert.ok(!result.user);
+  return result.challengeToken;
+}
+test("MFA enrollment revokes sessions; recovery codes and login challenges are single use", async () => {
+  const { env, DB, user, cookie, codes, secret } = await enrolledOwner();
+  assert.equal(codes.length, 10);
+  assert.equal((await call(env, "/auth/me", undefined, cookie)).status, 401);
+  assert.ok(
+    !DB.sqlite
+      .prepare("SELECT secret_ciphertext FROM mfa_credentials")
+      .get()
+      .secret_ciphertext.includes(secret),
+  );
+  assert.ok(
+    !JSON.stringify(
+      DB.sqlite.prepare("SELECT * FROM mfa_recovery_codes").all(),
+    ).includes(codes[0]),
+  );
+  const token = await challenge(env);
+  const [first, second] = await Promise.all([
+    call(env, "/auth/mfa", { challengeToken: token, code: codes[0] }),
+    call(env, "/auth/mfa", { challengeToken: token, code: codes[0] }),
+  ]);
+  assert.equal([first, second].filter((r) => r.status === 200).length, 1);
+  const accepted = first.status === 200 ? first : second;
+  const newCookie = accepted.headers.get("set-cookie").split(";")[0];
+  assert.equal((await call(env, "/auth/me", undefined, newCookie)).status, 200);
+  assert.equal(
+    (
+      await call(env, "/auth/mfa", {
+        challengeToken: await challenge(env),
+        code: codes[0],
+      })
+    ).status,
+    409,
+  );
+  const disabled = await call(
+    env,
+    "/account/mfa/disable",
+    { password: "Strong-Owner-2026!", code: codes[1] },
+    newCookie,
+  );
+  assert.equal(disabled.status, 200);
+  assert.equal((await call(env, "/auth/me", undefined, newCookie)).status, 401);
+  assert.equal(
+    DB.sqlite
+      .prepare("SELECT COUNT(*) AS n FROM mfa_credentials WHERE user_id=?")
+      .get(user.id).n,
+    0,
+  );
+  const login = await call(env, "/auth/login", {
+    email: "owner@example.com",
+    password: "Strong-Owner-2026!",
+  });
+  assert.ok((await login.json()).user);
+  DB.sqlite.close();
+});
+test("MFA challenges are bounded and stale authentication versions cannot complete sign-in", async () => {
+  const { env, DB, codes, user } = await enrolledOwner();
+  const token = await challenge(env);
+  for (let i = 0; i < 5; i++)
+    assert.equal(
+      (
+        await call(env, "/auth/mfa", {
+          challengeToken: token,
+          code: "bad-code",
+        })
+      ).status,
+      401,
+    );
+  assert.equal(
+    (await call(env, "/auth/mfa", { challengeToken: token, code: codes[0] }))
+      .status,
+    401,
+  );
+  const stale = await challenge(env);
+  DB.sqlite
+    .prepare("UPDATE users SET auth_version=auth_version+1 WHERE id=?")
+    .run(user.id);
+  assert.equal(
+    (await call(env, "/auth/mfa", { challengeToken: stale, code: codes[0] }))
+      .status,
+    401,
+  );
+  assert.equal(
+    DB.sqlite.prepare("SELECT COUNT(*) AS n FROM mfa_recovery_codes").get().n,
+    10,
+  );
+  DB.sqlite.close();
+});
+test("MFA recovery-code replacement invalidates the old set without disclosing stored secrets", async () => {
+  const { env, DB, codes } = await enrolledOwner();
+  const response = await call(env, "/auth/mfa", {
+    challengeToken: await challenge(env),
+    code: codes[0],
+  });
+  const cookie = response.headers.get("set-cookie").split(";")[0];
+  const replaced = await call(
+    env,
+    "/account/mfa/recovery",
+    { password: "Strong-Owner-2026!", code: codes[1] },
+    cookie,
+  );
+  assert.equal(replaced.status, 200);
+  const fresh = (await replaced.json()).recoveryCodes;
+  assert.equal(fresh.length, 10);
+  assert.notDeepEqual(codes, fresh);
+  assert.equal(
+    (
+      await call(env, "/auth/mfa", {
+        challengeToken: await challenge(env),
+        code: codes[2],
+      })
+    ).status,
+    409,
+  );
+  const profile = await (
+    await call(env, "/account/mfa", undefined, cookie)
+  ).json();
+  assert.equal(profile.recoveryCodesRemaining, 10);
+  assert.equal(profile.secret, undefined);
+  DB.sqlite.close();
+});
+function photoStorage() {
+  const objects = new Map();
+  return {
+    objects,
+    put: async (key, stream) => {
+      objects.set(
+        key,
+        new Uint8Array(await new Response(stream).arrayBuffer()),
+      );
+    },
+    get: async (key) => (objects.has(key) ? { body: objects.get(key) } : null),
+    delete: async (keys) => {
+      for (const key of Array.isArray(keys) ? keys : [keys])
+        objects.delete(key);
+    },
+  };
+}
+function guestMediaCall(env, token, path = "", method = "GET", body) {
+  return worker.fetch(
+    new Request(
+      "http://localhost/api/v1/public/events/test-event/media" + path,
+      {
+        method,
+        headers: { Authorization: `Guest ${token}` },
+        ...(body ? { body } : {}),
+      },
+    ),
+    env,
+    { waitUntil() {} },
+  );
+}
+function photoForm(consent = true) {
+  const form = new FormData();
+  form.set(
+    "file",
+    new File(
+      [Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0])],
+      "photo.png",
+      { type: "image/png" },
+    ),
+  );
+  if (consent) form.set("consent", "true");
+  form.set("caption", "Guest photo");
+  return form;
+}
+test("guest photos require consent, approval and gallery opt-in; withdrawal revokes access", async () => {
+  const { env, DB, cookie } = await ownerFixture();
+  env.MEDIA = photoStorage();
+  const token = "guest-photo-token-2026-aaaa",
+    other = "guest-photo-token-2026-bbbb";
+  DB.sqlite.exec(
+    "UPDATE events SET settings_json=json_set(settings_json,'$.guestUploads',json('true'),'$.guestGallery',json('true')) WHERE id='e'",
+  );
+  for (const [id, t] of [
+    ["g", token],
+    ["other", other],
+  ])
+    DB.sqlite
+      .prepare(
+        "INSERT INTO guests(id,event_id,name,access_token_hash) VALUES(?,'e','Guest',?)",
+      )
+      .run(id, await sha(t));
+  assert.equal(
+    (await guestMediaCall(env, token, "", "POST", photoForm(false))).status,
+    422,
+  );
+  const upload = await guestMediaCall(env, token, "", "POST", photoForm());
+  assert.equal(upload.status, 201);
+  const { id } = await upload.json();
+  assert.equal((await guestMediaCall(env, other, `/${id}/file`)).status, 404);
+  assert.equal((await guestMediaCall(env, token, `/${id}/file`)).status, 200);
+  assert.equal(
+    (
+      await http(env, `/events/e/media/${id}`, {
+        method: "PATCH",
+        body: { status: "approved" },
+        cookie,
+      })
+    ).status,
+    200,
+  );
+  assert.equal((await guestMediaCall(env, other, `/${id}/file`)).status, 200);
+  assert.equal(
+    (await (await guestMediaCall(env, other)).json()).items.length,
+    1,
+  );
+  await guestMediaCall(env, other, `/${id}`, "DELETE");
+  assert.equal((await guestMediaCall(env, token, `/${id}/file`)).status, 200);
+  await guestMediaCall(env, token, `/${id}`, "DELETE");
+  assert.equal((await guestMediaCall(env, other, `/${id}/file`)).status, 404);
+  assert.equal(
+    DB.sqlite.prepare("SELECT COUNT(*) AS n FROM media_deletions").get().n,
+    1,
+  );
+  DB.sqlite.close();
+});
+test("upload quota and R2 failure cleanup are durable; active reservations defer erasure", async () => {
+  const { env, DB } = await ownerFixture();
+  env.MEDIA = photoStorage();
+  const token = "guest-photo-token-2026-cccc";
+  DB.sqlite.exec(
+    "UPDATE events SET settings_json=json_set(settings_json,'$.guestUploads',json('true')) WHERE id='e'",
+  );
+  DB.sqlite
+    .prepare(
+      "INSERT INTO guests(id,event_id,name,access_token_hash) VALUES('g','e','Guest',?)",
+    )
+    .run(await sha(token));
+  env.MEDIA.put = async () => {
+    throw new Error("Storage unavailable");
+  };
+  assert.equal(
+    (await guestMediaCall(env, token, "", "POST", photoForm())).status,
+    500,
+  );
+  assert.equal(DB.sqlite.prepare("SELECT COUNT(*) AS n FROM media").get().n, 0);
+  assert.equal(
+    DB.sqlite.prepare("SELECT COUNT(*) AS n FROM media_deletions").get().n,
+    1,
+  );
+  DB.sqlite.exec(
+    "DELETE FROM media_deletions;INSERT INTO media_uploads(object_key,expires_at) VALUES('inflight',datetime('now','+1 hour'));INSERT INTO media_deletions(object_key) VALUES('inflight')",
+  );
+  let removed = [];
+  env.MEDIA.delete = async (keys) => removed.push(...keys);
+  await worker.scheduled({}, env, { waitUntil() {} });
+  assert.deepEqual(removed, []);
+  assert.equal(
+    DB.sqlite.prepare("SELECT COUNT(*) AS n FROM media_deletions").get().n,
+    1,
+  );
+  DB.sqlite.exec(
+    "UPDATE media_uploads SET expires_at=datetime('now','-1 minute')",
+  );
+  await worker.scheduled({}, env, { waitUntil() {} });
+  assert.deepEqual(removed, ["inflight"]);
+  for (let i = 0; i < 20; i++)
+    DB.sqlite
+      .prepare(
+        "INSERT INTO media(id,event_id,guest_id,object_key,mime_type,size_bytes) VALUES(?,'e','g',?,'image/png',12)",
+      )
+      .run(`m${i}`, `file${i}`);
+  assert.equal(
+    (await guestMediaCall(env, token, "", "POST", photoForm())).status,
+    409,
+  );
+  DB.sqlite.close();
+});
+test("communication consent changes append source-labelled history and privacy erasure removes it", async () => {
+  const { env, DB, cookie } = await ownerFixture();
+  const token = "consent-history-token-2026";
+  DB.sqlite
+    .prepare(
+      "INSERT INTO guests(id,event_id,name,email,access_token_hash) VALUES('g','e','Guest','old@example.com',?)",
+    )
+    .run(await sha(token));
+  await call(env, "/public/preferences", {
+    token,
+    email: true,
+    sms: false,
+    whatsapp: false,
+  });
+  DB.sqlite.exec("UPDATE guests SET email='new@example.com' WHERE id='g'");
+  const history = DB.sqlite
+    .prepare("SELECT * FROM communication_consents ORDER BY id")
+    .all();
+  assert.equal(history.length, 2);
+  assert.equal(history[0].source, "guest_link");
+  assert.equal(history[0].email_opt_in, 1);
+  assert.equal(history[1].source, "contact_change");
+  assert.equal(history[1].email_opt_in, 0);
+  assert.equal(
+    (await call(env, "/events/e/consents", undefined, cookie)).status,
+    200,
+  );
+  await call(
+    env,
+    "/events/e/erase-guest/g",
+    { password: "Strong-Owner-2026!" },
+    cookie,
+  );
+  assert.equal(
+    DB.sqlite.prepare("SELECT COUNT(*) AS n FROM communication_consents").get()
+      .n,
+    0,
+  );
+  DB.sqlite.close();
+});
+
+test("password reset preserves MFA and recovery codes still work during an encryption-key incident", async () => {
+  const { env, DB, codes, user } = await enrolledOwner(),
+    token = "reset-mfa-account-token-2026";
+  DB.sqlite
+    .prepare(
+      "INSERT INTO password_reset_tokens(id,user_id,token_hash,expires_at) VALUES(?,?,?,?)",
+    )
+    .run(
+      "mfa-reset",
+      user.id,
+      await sha(token),
+      new Date(Date.now() + 60000).toISOString(),
+    );
+  assert.equal(
+    (
+      await call(env, "/auth/password/reset", {
+        token,
+        password: "Reset-MFA-Password-2026!",
+      })
+    ).status,
+    200,
+  );
+  env.APP_ENV = "production";
+  env.DEMO_MODE = "false";
+  env.APP_ORIGIN = "https://example.com";
+  env.SESSION_PEPPER = "p".repeat(40);
+  delete env.MFA_ENCRYPTION_KEY;
+  const login = await (
+    await call(env, "/auth/login", {
+      email: "owner@example.com",
+      password: "Reset-MFA-Password-2026!",
+    })
+  ).json();
+  assert.equal(login.mfaRequired, true);
+  assert.ok(!login.user);
+  assert.equal(
+    (
+      await call(env, "/auth/mfa", {
+        challengeToken: login.challengeToken,
+        code: codes[0],
+      })
+    ).status,
+    200,
+  );
+  assert.ok(
+    DB.sqlite
+      .prepare("SELECT enabled_at FROM mfa_credentials WHERE user_id=?")
+      .get(user.id).enabled_at,
+  );
+  DB.sqlite.close();
+});
+
+test("MFA attempt limits apply per account across newly issued challenges", async () => {
+  const { env, DB, codes } = await enrolledOwner();
+  for (let i = 0; i < 19; i++)
+    assert.equal(
+      (
+        await call(env, "/auth/mfa", {
+          challengeToken: await challenge(env),
+          code: "bad-code",
+        })
+      ).status,
+      401,
+    );
+  assert.equal(
+    (
+      await call(env, "/auth/mfa", {
+        challengeToken: await challenge(env),
+        code: codes[0],
+      })
+    ).status,
+    429,
+  );
+  assert.equal(
+    DB.sqlite.prepare("SELECT COUNT(*) AS n FROM mfa_recovery_codes").get().n,
+    10,
+  );
+  DB.sqlite.close();
+});

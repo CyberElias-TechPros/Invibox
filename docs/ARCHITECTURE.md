@@ -35,3 +35,11 @@ Draft/preview can publish after an occasion exists. Published events may activat
 ## Limitations
 
 The workspace still uses a bulk snapshot and a sizeable application component. Large-event pagination, per-operation quotas, durable offline workflows, more granular organization administration and the wider product modules are not implied by the current architecture. See [READINESS.md](READINESS.md).
+
+## Authenticator and guest-media boundaries
+
+Authenticator credentials are isolated from profile exports. AES-GCM secrets bind ciphertext to account identity, and a separate stable encryption key avoids coupling TOTP availability to session-pepper rotation. Database proof/claim triggers atomically consume TOTP counters, recovery codes and login challenges with session creation. MFA password reset does not remove the second factor.
+
+Guest photo routes authenticate invitation capabilities independently of organizer cookies. Both host settings and per-photo moderation/sharing flags govern disclosure. Metadata is reserved before object upload; a separate upload reservation survives event/guest erasure so the cleanup worker does not race active storage writes. Expired reservations are recovered by cron. Gallery fetches are paginated and use authorization headers/blob URLs rather than embedding invitation tokens in image URLs.
+
+Consent-state changes generate database-triggered, source-labelled history. Owner/admin audit UI shows bounded recent records; owner exports include full retained consent history, and privacy erasure cascades through it. Browser invitation editors register an unsaved-change guard used by internal navigation and account/event switching.

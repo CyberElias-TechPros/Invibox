@@ -280,6 +280,12 @@ export function registerAccountRoutes(
       c.env.DB.prepare("DELETE FROM team_invitations WHERE email=?").bind(
         user.email,
       ),
+      c.env.DB.prepare("DELETE FROM mfa_credentials WHERE user_id=?").bind(
+        user.id,
+      ),
+      c.env.DB.prepare("DELETE FROM mfa_challenges WHERE user_id=?").bind(
+        user.id,
+      ),
       c.env.DB.prepare("DELETE FROM event_members WHERE user_id=?").bind(
         user.id,
       ),

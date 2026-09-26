@@ -41,7 +41,7 @@ export function registerCommunicationRoutes(
       }),
     );
     const result = await c.env.DB.prepare(
-      "UPDATE guests SET email_opt_in=?,sms_opt_in=?,whatsapp_opt_in=?,communication_consent_at=CURRENT_TIMESTAMP WHERE access_token_hash=?",
+      "UPDATE guests SET email_opt_in=?,sms_opt_in=?,whatsapp_opt_in=?,communication_consent_at=CURRENT_TIMESTAMP,communication_consent_source='guest_link' WHERE access_token_hash=?",
     )
       .bind(
         body.email ? 1 : 0,
@@ -75,7 +75,7 @@ export function registerCommunicationRoutes(
       });
     // Channel is enum-validated, never an arbitrary SQL identifier. Signed links can only opt out.
     await c.env.DB.prepare(
-      `UPDATE guests SET ${body.channel}_opt_in=0,communication_consent_at=CURRENT_TIMESTAMP WHERE id=?`,
+      `UPDATE guests SET ${body.channel}_opt_in=0,communication_consent_at=CURRENT_TIMESTAMP,communication_consent_source='signed_unsubscribe' WHERE id=?`,
     )
       .bind(body.guest)
       .run();

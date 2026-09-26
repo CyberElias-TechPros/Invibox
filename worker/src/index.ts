@@ -1,3 +1,5 @@
+import { registerGuestMediaRoutes, cleanAbandonedUploads } from "./guestMedia";
+import { loginChallenge, registerMfaRoutes } from "./mfa";
 import { registerCommunicationRoutes, withUnsubscribe } from "./communications";
 import { initializePayment, reconcilePayment } from "./payments";
 import { registerPrivacyRoutes, purgeMedia } from "./privacy";
@@ -91,6 +93,7 @@ app.use(
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowHeaders: [
       "Content-Type",
+      "Authorization",
       "Idempotency-Key",
       "X-Request-Id",
       "If-Match",
@@ -210,6 +213,7 @@ async function ownEvent(c: any, eventId: string) {
     ["completed", "archived"].includes(row.lifecycle) &&
     resource !== "" &&
     !(c.req.method === "DELETE" && resource.startsWith("/team")) &&
+    !(c.req.method === "PATCH" && /^\/media\/[^/]+$/.test(resource)) &&
     !/^\/payments\/[^/]+\/reconcile$/.test(resource)
   )
     throw new HTTPException(409, { message: "This event is read-only" });
@@ -275,6 +279,8 @@ app.post("/api/v1/auth/login", async (c) => {
     .first<any>();
   if (!user || !(await verifyPassword(body.password, user.password_hash)))
     throw new HTTPException(401, { message: "Invalid email or password" });
+  const challenge = await loginChallenge(c, user);
+  if (challenge) return challenge;
   const token = randomToken();
   await c.env.DB.prepare(
     "INSERT INTO sessions(id,user_id,token_hash,expires_at,user_agent,auth_version) VALUES(?,?,?,?,?,?)",
@@ -402,6 +408,8 @@ app.get("/api/v1/auth/me", authenticate, async (c) => {
 });
 
 registerAccountRoutes(app, authenticate, rateLimit);
+registerMfaRoutes(app, authenticate, rateLimit);
+registerGuestMediaRoutes(app, rateLimit);
 registerPrivacyRoutes(app, authenticate, rateLimit);
 registerCommunicationRoutes(app, rateLimit);
 
@@ -706,6 +714,8 @@ app.patch("/api/v1/events/:eventId", async (c) => {
       visibility: z.enum(["public", "private", "guest_specific"]).optional(),
       settings: z
         .object({
+          guestUploads: z.boolean().optional(),
+          guestGallery: z.boolean().optional(),
           capabilities: z
             .array(
               z.enum([
@@ -765,7 +775,12 @@ app.patch("/api/v1/events/:eventId", async (c) => {
       body.timezone ?? current.timezone,
       body.location ?? current.location,
       body.visibility ?? current.visibility,
-      body.settings ? JSON.stringify(body.settings) : current.settings_json,
+      body.settings
+        ? JSON.stringify({
+            ...JSON.parse(current.settings_json),
+            ...body.settings,
+          })
+        : current.settings_json,
       body.theme ? JSON.stringify(body.theme) : current.theme_json,
       body.lifecycle ?? current.lifecycle,
       id,
@@ -810,7 +825,7 @@ app.get("/api/v1/events/:eventId/snapshot", async (c) => {
       .bind(id)
       .all(),
     c.env.DB.prepare(
-      "SELECT id,mime_type,size_bytes,caption,status,created_at FROM media WHERE event_id=? ORDER BY created_at DESC",
+      "SELECT id,guest_id,mime_type,size_bytes,caption,status,share_with_guests,created_at FROM media WHERE event_id=? AND upload_state='ready' ORDER BY created_at DESC",
     )
       .bind(id)
       .all(),
@@ -1473,6 +1488,16 @@ app.get("/api/v1/events/:eventId/audit", async (c) => {
     .all();
   return c.json({ entries: rows.results });
 });
+app.get("/api/v1/events/:eventId/consents", async (c) => {
+  const id = c.req.param("eventId");
+  await ownEvent(c, id);
+  const rows = await c.env.DB.prepare(
+    "SELECT id,guest_id,email_opt_in,sms_opt_in,whatsapp_opt_in,source,policy_version,created_at FROM communication_consents WHERE event_id=? ORDER BY id DESC LIMIT 100",
+  )
+    .bind(id)
+    .all();
+  return c.json({ entries: rows.results });
+});
 app.post("/api/v1/events/:eventId/guests/:guestId/token", async (c) => {
   const id = c.req.param("eventId");
   const event = await ownEvent(c, id);
@@ -1837,15 +1862,34 @@ app.patch("/api/v1/events/:eventId/media/:mediaId", async (c) => {
   await ownEvent(c, id);
   const body = await json(
     c.req.raw,
-    z.object({ status: z.enum(["pending", "approved", "rejected"]) }),
+    z.object({
+      status: z.enum(["pending", "approved", "rejected"]),
+      shareWithGuests: z.boolean().optional(),
+    }),
   );
   const result = await c.env.DB.prepare(
-    "UPDATE media SET status=? WHERE id=? AND event_id=?",
+    "UPDATE media SET status=?,share_with_guests=COALESCE(?,share_with_guests),consent_at=CASE WHEN ?=1 THEN COALESCE(consent_at,CURRENT_TIMESTAMP) ELSE consent_at END WHERE id=? AND event_id=? AND upload_state='ready'",
   )
-    .bind(body.status, c.req.param("mediaId"), id)
+    .bind(
+      body.status,
+      body.shareWithGuests === undefined ? null : body.shareWithGuests ? 1 : 0,
+      body.shareWithGuests ? 1 : 0,
+      c.req.param("mediaId"),
+      id,
+    )
     .run();
   if (!result.meta.changes)
     throw new HTTPException(404, { message: "Media not found" });
+  await audit(
+    c.env.DB,
+    id,
+    c.get("userId"),
+    "media.moderate",
+    "media",
+    c.req.param("mediaId"),
+    c.get("requestId"),
+    { status: body.status, shareWithGuests: body.shareWithGuests },
+  );
   return c.json({ ok: true });
 });
 app.get("/api/v1/events/:eventId/preview", async (c) => {
@@ -2166,6 +2210,13 @@ app.onError((err, c) => {
       400,
     );
   const conflicts: Record<string, string> = {
+    guest_media_quota:
+      "Guest photo allowance reached (20 photos / 100 MB per guest, 2,000 items / 2 GB per event). Withdraw old photos or contact the organizer.",
+    guest_uploads_closed: "Guest uploads are closed for this event.",
+    mfa_proof_used:
+      "Authenticator code is invalid or already used. Wait for the next code or use an unused recovery code.",
+    mfa_challenge_expired:
+      "Sign-in challenge expired. Sign in with your password again.",
     archive_required:
       "Archive every affected event before requesting deletion.",
     reset_consumed:
@@ -2394,6 +2445,18 @@ export default {
     }
   },
   async scheduled(_event: ScheduledEvent, env: AppEnv["Bindings"]) {
+    await env.DB.batch([
+      env.DB.prepare(
+        "DELETE FROM mfa_challenges WHERE julianday(expires_at)<=julianday('now')",
+      ),
+      env.DB.prepare(
+        "DELETE FROM mfa_credentials WHERE enabled_at IS NULL AND julianday(pending_expires_at)<=julianday('now')",
+      ),
+    ]);
+    await env.DB.prepare("DELETE FROM mfa_attempts WHERE window_start<?")
+      .bind(Math.floor(Date.now() / 300000) - 1)
+      .run();
+    await cleanAbandonedUploads(env);
     const outcomes = await Promise.allSettled([
       dispatchOutbox(env),
       purgeMedia(env),

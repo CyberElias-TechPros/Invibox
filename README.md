@@ -34,7 +34,7 @@ npm audit --audit-level=high
 
 ## Readiness
 
-Core organizer/guest workflows have been hardened and tested, including tenant isolation, private invitations, versioned writes, RSVP, seating, role-scoped check-in, text-content editing, media moderation and provider adapters. The follow-up adds account verification/security, scoped exports and privacy erasure, idempotent payment recovery/ledger, guest QR passes, and opt-in/unsubscribe messaging controls. **The whole original product vision is not production-complete merely by entering keys.**
+Core organizer/guest workflows have been hardened and tested, including tenant isolation, private invitations, versioned writes, RSVP, seating, role-scoped check-in, text-content editing, media moderation and provider adapters. The follow-up adds account verification/security, scoped exports and privacy erasure, idempotent payment recovery/ledger, guest QR passes, and opt-in/unsubscribe messaging controls. Authenticator MFA/recovery, consent-based guest photo uploads/gallery, audit history and unsaved-edit navigation protection are also implemented. **The whole original product vision is not production-complete merely by entering keys.**
 
 Start with the [readiness review and remaining work](docs/READINESS.md). [Deployment](docs/DEPLOYMENT.md) covers ordered setup, production configuration generation, first-party API proxy, providers, migrations and acceptance gates. No secrets belong in Git.
 

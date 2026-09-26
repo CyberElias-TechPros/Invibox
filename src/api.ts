@@ -26,6 +26,71 @@ async function request<T>(path: string, init: RequestInit = {}) {
   return data as T;
 }
 export const api = {
+  audit: (id: string) => request<{ entries: any[] }>(`/events/${id}/audit`),
+  consents: (id: string) =>
+    request<{ entries: any[] }>(`/events/${id}/consents`),
+  guestGallery: (slug: string, token: string, cursor = "") =>
+    request<any>(
+      `/public/events/${encodeURIComponent(slug)}/media?cursor=${encodeURIComponent(cursor)}`,
+      { headers: { Authorization: `Guest ${token}` } },
+    ),
+  guestPhoto: async (
+    slug: string,
+    id: string,
+    token: string,
+    signal: AbortSignal,
+  ) => {
+    const response = await fetch(
+      `${BASE}/public/events/${encodeURIComponent(slug)}/media/${encodeURIComponent(id)}/file`,
+      { headers: { Authorization: `Guest ${token}` }, signal },
+    );
+    if (!response.ok) throw new Error("Photo unavailable");
+    return response.blob();
+  },
+  uploadGuestPhoto: async (slug: string, token: string, data: FormData) => {
+    const response = await fetch(
+      `${BASE}/public/events/${encodeURIComponent(slug)}/media`,
+      {
+        method: "POST",
+        headers: { Authorization: `Guest ${token}` },
+        body: data,
+        signal: AbortSignal.timeout(60000),
+      },
+    );
+    const body = await response.json();
+    if (!response.ok) throw new Error(body?.error?.message || "Upload failed");
+    return body;
+  },
+  withdrawGuestPhoto: (slug: string, id: string, token: string) =>
+    request(
+      `/public/events/${encodeURIComponent(slug)}/media/${encodeURIComponent(id)}`,
+      { method: "DELETE", headers: { Authorization: `Guest ${token}` } },
+    ),
+  mfaStatus: () =>
+    request<{
+      enabled: boolean;
+      available: boolean;
+      recoveryCodesRemaining: number;
+    }>("/account/mfa"),
+  setupMfa: (password: string) =>
+    request<{ secret: string; uri: string }>("/account/mfa/setup", {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    }),
+  manageMfa: (
+    action: "enable" | "disable" | "recovery",
+    password: string,
+    code: string,
+  ) =>
+    request<{ recoveryCodes?: string[]; signInRequired: boolean }>(
+      `/account/mfa/${action}`,
+      { method: "POST", body: JSON.stringify({ password, code }) },
+    ),
+  completeMfa: (challengeToken: string, code: string) =>
+    request("/auth/mfa", {
+      method: "POST",
+      body: JSON.stringify({ challengeToken, code }),
+    }),
   savePreferences: (
     token: string,
     preferences: { email: boolean; sms: boolean; whatsapp: boolean },
@@ -211,11 +276,12 @@ export const api = {
   moderateMedia: (
     eventId: string,
     mediaId: string,
-    status: "approved" | "rejected",
+    status: "pending" | "approved" | "rejected",
+    shareWithGuests?: boolean,
   ) =>
     request(`/events/${eventId}/media/${mediaId}`, {
       method: "PATCH",
-      body: JSON.stringify({ status }),
+      body: JSON.stringify({ status, shareWithGuests }),
     }),
   uploadMedia: async (eventId: string, file: File, caption = "") => {
     const form = new FormData();

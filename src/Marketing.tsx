@@ -531,7 +531,7 @@ const features = [
   [
     Images,
     "Memory Vault",
-    "Organizers can upload, moderate and retrieve event media. Guest-contributed uploads and a shared guest gallery are not available yet.",
+    "Invite guests to submit photos with sharing consent. Organizers approve or hide submissions; only invited guests see approved, shareable photos when the gallery is enabled.",
   ],
   [
     BarChart3,
@@ -777,7 +777,7 @@ function Pricing() {
       items: [
         "Paid plans and billing entitlements",
         "Refund and settlement automation",
-        "Offline check-in and guest gallery",
+        "Offline check-in and guest video uploads",
         "Advanced visual templates and localization",
       ],
     },

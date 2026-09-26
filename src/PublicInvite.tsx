@@ -1,3 +1,4 @@
+import GuestGallery from "./GuestGallery";
 import CommunicationPreferences from "./CommunicationPreferences";
 import GuestPass from "./GuestPass";
 import { reservePaymentAttempt } from "./paymentAttempt";
@@ -334,6 +335,7 @@ export default function PublicInvite() {
       {guest && token && !preview && (
         <CommunicationPreferences token={token} guest={guest} />
       )}
+      {guest && token && !preview && <GuestGallery slug={slug} token={token} />}
       {guest && token && !preview && (
         <GuestPass token={token} name={guest.name} slug={slug} />
       )}

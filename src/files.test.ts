@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { calendar, csvCell, parseCsv } from "./files";
+import { calendar, csvCell, parseCsv, dateInTimezone } from "./files";
 describe("portable file exports", () => {
   it("parses quoted commas, newlines, escaped quotes and BOM", () => {
     expect(
@@ -30,4 +30,11 @@ describe("portable file exports", () => {
     expect(ics).toContain("Dinner\\nSUMMARY:injection");
     expect(ics).toContain("Hall\\, NYC");
   });
+});
+
+it("preserves the event-local date when UTC falls on the previous day", () => {
+  expect(dateInTimezone("2026-12-31T23:00:00Z", "Pacific/Auckland")).toBe(
+    "2027-01-01",
+  );
+  expect(dateInTimezone("2026-12-31T23:00:00Z", "UTC")).toBe("2026-12-31");
 });

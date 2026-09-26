@@ -8,7 +8,7 @@ import { uid } from "./security";
 
 export async function purgeMedia(env: Bindings) {
   const rows = await env.DB.prepare(
-    "SELECT object_key FROM media_deletions ORDER BY created_at LIMIT 50",
+    "SELECT object_key FROM media_deletions WHERE NOT EXISTS(SELECT 1 FROM media_uploads u WHERE u.object_key=media_deletions.object_key AND julianday(u.expires_at)>julianday('now')) ORDER BY created_at LIMIT 50",
   ).all<{ object_key: string }>();
   if (!rows.results.length) return;
   await env.MEDIA.delete(rows.results.map((row) => row.object_key));
@@ -50,6 +50,8 @@ export function registerPrivacyRoutes(
       const queries: Record<string, string> = {
         guests:
           "SELECT id,name,email,phone,group_id,household_id,language,status,email_opt_in,sms_opt_in,whatsapp_opt_in,communication_consent_at,party_size,meal,dietary_notes,plus_one_name,table_name,checked_in_at,created_at FROM guests WHERE event_id=?",
+        consentHistory:
+          "SELECT id,guest_id,email_opt_in,sms_opt_in,whatsapp_opt_in,source,policy_version,created_at FROM communication_consents WHERE event_id=? ORDER BY id",
         groups: "SELECT id,name,kind FROM guest_groups WHERE event_id=?",
         households:
           "SELECT id,name,seat_limit FROM households WHERE event_id=?",
@@ -61,7 +63,7 @@ export function registerPrivacyRoutes(
         budgets: "SELECT * FROM budgets WHERE event_id=?",
         vendors: "SELECT * FROM vendors WHERE event_id=?",
         media:
-          "SELECT id,guest_id,mime_type,size_bytes,caption,status,created_at FROM media WHERE event_id=?",
+          "SELECT id,guest_id,mime_type,size_bytes,caption,status,share_with_guests,consent_at,upload_state,created_at FROM media WHERE event_id=?",
         payments:
           "SELECT reference,purpose,amount_minor,currency,status,paid_at,created_at FROM payments WHERE event_id=?",
         announcements:

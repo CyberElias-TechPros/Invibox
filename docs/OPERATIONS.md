@@ -58,3 +58,17 @@ Monitor `media_deletions` backlog and R2 failures. Tasks survive metadata deleti
 - Configure Resend and verified sender DNS before enabling those workflows. Verification is requested explicitly from Account & security, expires after 24 hours and is single-use; an email scanner GET does not consume it.
 - Password change/recovery revokes all sessions. Revoke other sessions preserves the current one. Account deletion is irreversible through the app and anonymizes a disabled identity row to preserve shared-record foreign keys.
 - `SESSION_PEPPER` also signs opt-out-only links. Rotation invalidates old sessions and unsubscribe signatures; affected guests can still manage preferences from a valid personal invitation. Coordinate rotation with support rather than silently breaking old message links.
+
+## MFA recovery and key incidents
+
+- Users enroll in Account & security; setup is not enabled until a fresh authenticator code is confirmed. Store recovery codes outside the browser. Codes are never returned by later reads.
+- Login challenges expire after five minutes/five attempts. An atomic account-wide counter also limits proof attempts to twenty per five-minute window, including across new challenges/IP addresses. Both challenge and proof consumption are transactional. Investigate repeated failures, clock skew and encryption-key changes; do not disable MFA automatically after a password reset.
+- A valid recovery code can sign in even during an MFA encryption-key incident. A signed-in user can disable MFA using current password plus another unused code, then enroll again once configuration is restored. Lost authenticator **and** lost recovery codes require an operator identity-review procedure; no unauthenticated support bypass is implemented.
+- `MFA_ENCRYPTION_KEY` encrypts TOTP secrets with per-record AES-GCM IVs and account-bound authenticated data. Session-pepper rotation does not re-encrypt secrets. Protect and restore the encryption key with your data backups; blind key replacement breaks enrolled authenticators.
+
+## Photo and consent operations
+
+- Guest photos require explicit sharing consent and host opt-ins; all start pending. Reject/hide removes gallery availability, while the submitting guest can still see and withdraw their own ready photo. Ordinary staff authorization applies to moderation; event completion does not lock safety maintenance.
+- New gallery endpoints use guest authorization headers and no-store responses. Previously downloaded copies cannot be recalled, and the event-wide gallery is not private-occasion scoped. Be explicit about this consent scope.
+- D1 reserves upload metadata and a one-hour `media_uploads` reservation before R2 writes. Purging ignores active reservations. Cron recovers expired reservations, queues abandoned objects and then drains normal deletion tasks. Alert on old `media_uploads`, persistent `uploading` rows and `media_deletions` backlog. This is bounded recovery, not an independent bucket inventory/orphan audit.
+- Preference-change triggers retain source-labelled channel states, policy version and time. `migration_snapshot` is only the state observed during migration. These records are not retroactive consent proof or independent identity verification. Guest/event erasure removes the associated history. Approve jurisdiction-specific retention and policy text separately.

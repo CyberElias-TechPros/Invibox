@@ -1,6 +1,6 @@
 # Implementation status
 
-Updated 26 September 2026. The authoritative current assessment is [docs/READINESS.md](docs/READINESS.md). Earlier blanket claims that all features were complete or that only credentials remained were too broad.
+Updated 27 September 2026. The authoritative current assessment is [docs/READINESS.md](docs/READINESS.md). Earlier blanket claims that all features were complete or that only credentials remained were too broad.
 
 ## Completed in the hardening pass
 
@@ -27,12 +27,19 @@ Updated 26 September 2026. The authoritative current assessment is [docs/READINE
 - Guest-controlled per-channel communication opt-ins, signed unsubscribe links, queued-message suppression and contact-change consent reset.
 - Route-level lazy loading and full browser/API integration for the new controls.
 
+## Authenticator/media completion pass
+
+- Authenticator TOTP enrollment/sign-in with encrypted secrets, bounded challenges, replay guards, hashed recovery codes and authenticated disable/rotation flows.
+- Consent-based guest photo uploads, host moderation, private gallery and withdrawal, database quotas and durable upload-reservation cleanup.
+- Trigger-recorded communication preference history, owner/admin audit UI and privacy-export integration.
+- Unsaved invitation navigation protection and partial event-settings merge fixes.
+
 ## Validation
 
-41 unit/HTTP/provider tests, 19 SQLite-backed Worker tests, 65 local Cloudflare API checks, full-stack smoke and six Chromium browser tests (including mocked-provider payment recovery) passed. Frontend/Worker type checks, frontend build, Worker dry-run, migrations and dependency audit passed. This is not a production load, penetration or accessibility certification.
+47 unit/HTTP/provider tests, 27 SQLite-backed Worker tests, 65 local Cloudflare API checks, full-stack smoke and nine Chromium browser tests (including mocked-provider payment recovery) passed. Frontend/Worker type checks, frontend build, Worker dry-run, migrations and dependency audit passed. This is not a production load, penetration or accessibility certification.
 
 ## Not complete
 
-See the explicit code/product backlog in [READINESS.md](docs/READINESS.md#remaining-codeproduct-work--not-solved-by-adding-keys): public SaaS billing/entitlements, MFA/abuse defenses, refunds/settlement, delivery/bounce callbacks and consent evidence policy, external-provider/backups erasure, guest media, true offline operations, transport/accommodation/ticket inventory, advanced visual editing, localization and large-scale operational validation.
+See the explicit code/product backlog in [READINESS.md](docs/READINESS.md#remaining-codeproduct-work--not-solved-by-adding-keys): public SaaS billing/entitlements, phishing-resistant authentication/abuse defenses, refunds/settlement, delivery/bounce callbacks and consent evidence policy, external-provider/backups erasure, guest video/audio and media scanning, true offline operations, transport/accommodation/ticket inventory, advanced visual editing, localization and large-scale operational validation.
 
 No production resources, provider accounts, secrets, legal policies, public deployment or live financial transactions were created by this change.

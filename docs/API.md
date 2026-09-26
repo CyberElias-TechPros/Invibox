@@ -90,3 +90,25 @@ Delivery-row `sent` means **accepted by the provider**, not delivery/read receip
 - `POST /demo/bootstrap` — explicit development-only fixture/session bootstrap. Never enable outside development.
 
 Endpoint availability does not imply every larger product flow exists. See [READINESS.md](READINESS.md) for unresolved implementation scope.
+
+## Authenticator MFA
+
+- `GET /account/mfa`: enabled/available flags and remaining recovery-code count; never returns a stored secret.
+- `POST /account/mfa/setup`: `{password}`, authenticated. Returns a newly generated `secret` and `otpauth` URI once; pending setup expires in ten minutes. An enabled authenticator cannot be overwritten.
+- `POST /account/mfa/enable`: `{password,code}`. Confirms a fresh TOTP, returns ten recovery codes once and revokes every session.
+- `POST /auth/login` returns `{mfaRequired:true,challengeToken}` **without a session** when MFA is enabled. Clients must not treat this as completed authentication.
+- `POST /auth/mfa`: `{challengeToken,code}` where code is TOTP or a recovery code. Five-minute expiry, five attempts per challenge, and twenty proof attempts per account per five-minute window across challenges. Challenge consumption, counter/recovery-code use and session creation commit atomically. Password/security-version changes invalidate pending challenges.
+- `POST /account/mfa/recovery`: `{password,code}` replaces the recovery-code set; old unused codes stop working. `POST /account/mfa/disable` requires the same proof, removes MFA and signs out all sessions.
+
+Each TOTP counter and recovery code is single-use. Wait for the next 30-second code after enrollment/use if needed. Password reset never disables MFA. Recovery codes remain usable when the encryption key is unavailable; TOTP/setup fail closed.
+
+## Guest photos and consent history
+
+- Event settings add independent `guestUploads` and `guestGallery` booleans, off by default. Partial settings updates merge with existing fields.
+- Guest photo routes require `Authorization: Guest <invitation token>`. Anonymous public-event visitors cannot access this gallery. No invitation token is put in photo URLs.
+- `POST /public/events/:slug/media`: multipart `file`, `caption?`, `consent=true`. Published/active/live events with guest uploads enabled only. JPEG/PNG/WebP, 10 MB maximum; signature checked, not malware-scanned/transcoded. A guest has a 20-file/100 MB allowance; event guest submissions stop at 2,000 total media records or 2 GB total media size. Returns pending moderation.
+- `GET /public/events/:slug/media?cursor=...`: up to 24 photos and `nextCursor`, upload/gallery flags. Shows the caller's own ready submissions plus approved, shareable photos when the gallery is enabled. Visibility is event-wide, not occasion-scoped.
+- `GET /public/events/:slug/media/:mediaId/file`: rechecks the same access policy on each request, private/no-store.
+- `DELETE /public/events/:slug/media/:mediaId`: withdraw own submissions only, even after archival; queues referenced R2 deletion. Does not erase copies already downloaded.
+- Existing organizer moderation accepts `{status,shareWithGuests?}`. Legacy organizer approvals are not automatically guest-visible; photos must also be explicitly marked shareable and the gallery enabled. Completion/archival does not block moderation maintenance.
+- `GET /events/:id/consents`: owner/admin only, latest 100 preference changes. Each change records guest/event, three channel flags, source, policy version and timestamp. Full retained history is part of password-confirmed owner exports; guest erasure cascades history deletion.

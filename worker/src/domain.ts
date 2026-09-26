@@ -16,7 +16,8 @@ export function canAccess(
   if (method === "GET") {
     if (resource === "/snapshot") return true; // Snapshot is separately redacted by role.
     if (role === "checkin_staff") return false;
-    if (/^\/(team|audit|integrations|payments)/.test(resource)) return false;
+    if (/^\/(team|audit|consents|integrations|payments)/.test(resource))
+      return false;
     return true;
   }
   const checkin = /^\/checkin\/scan$|^\/guests\/[^/]+\/checkin$/;

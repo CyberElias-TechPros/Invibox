@@ -1,10 +1,13 @@
+import AuditPanel, { GuestMediaSettings } from "./AuditPanel";
+import { confirmNavigation } from "./unsaved";
+
 import EventPrivacy from "./EventPrivacy";
 import PaymentsPanel from "./PaymentsPanel";
 import { AnnouncementHistory } from "./AnnouncementHistory";
 import { GuestAccess } from "./GuestAccess";
 import ExperienceEditor from "./ExperienceEditor";
 
-import { calendar, download, csvCell, parseCsv } from "./files";
+import { calendar, download, csvCell, parseCsv, dateInTimezone } from "./files";
 import { TeamPanel } from "./TeamPanel";
 import {
   lazy,
@@ -92,6 +95,9 @@ import { api } from "./api";
 
 const PublicInvite = lazy(() => import("./PublicInvite"));
 const Marketing = lazy(() => import("./Marketing"));
+const MfaLogin = lazy(() =>
+  import("./MfaPanel").then((module) => ({ default: module.MfaLogin })),
+);
 const AccountPage = lazy(() => import("./AccountPage"));
 const VerifyEmail = lazy(() =>
   import("./AccountPage").then((module) => ({ default: module.VerifyEmail })),
@@ -2037,7 +2043,7 @@ function Memories({ notify }: { notify: (s: string) => void }) {
   const { eventId, event, media, refresh } = useEventStore();
   const [uploading, setUploading] = useState(false);
   const [galleryFilter, setGalleryFilter] = useState<
-    "All" | "Pending" | "Approved"
+    "All" | "Pending" | "Approved" | "Rejected"
   >("All");
   const shown = media.filter(
     (item) =>
@@ -2052,15 +2058,14 @@ function Memories({ notify }: { notify: (s: string) => void }) {
           <>
             <button
               className="btn ghost"
-              onClick={async () => {
-                await navigator.clipboard.writeText(
-                  `${location.origin}/invite/${event?.slug || eventId}#gallery`,
-                );
-                notify("Guest upload link copied");
-              }}
+              onClick={() =>
+                notify(
+                  "Guests upload from their personal invitation. Copy or rotate individual links under Guests; there is no anonymous upload link.",
+                )
+              }
             >
               <Copy size={16} />
-              Copy upload link
+              Guest upload access
             </button>
             <label className="btn primary upload-btn">
               <Upload size={16} />
@@ -2100,8 +2105,9 @@ function Memories({ notify }: { notify: (s: string) => void }) {
             <i>One beautiful story.</i>
           </h2>
           <p>
-            Guests can contribute without an account. You decide what appears
-            publicly.
+            Guests can contribute without an account. Only approved, shareable
+            photos appear to invited guests when you enable the guest gallery in
+            Settings.
           </p>
           <div>
             <span>
@@ -2122,7 +2128,7 @@ function Memories({ notify }: { notify: (s: string) => void }) {
       <div className="gallery-head">
         <h3>Moderation queue</h3>
         <div className="filter-tabs">
-          {(["All", "Pending", "Approved"] as const).map((f) => (
+          {(["All", "Pending", "Approved", "Rejected"] as const).map((f) => (
             <button
               key={f}
               className={galleryFilter === f ? "active" : ""}
@@ -2158,16 +2164,43 @@ function Memories({ notify }: { notify: (s: string) => void }) {
                   <b>Guest memory</b>
                 </span>
                 <div>
-                  {item.status === "pending" && (
+                  {item.status !== "approved" && (
                     <button
                       onClick={async () => {
-                        await api.moderateMedia(eventId, item.id, "approved");
-                        await refresh();
-                        notify("Memory approved");
+                        try {
+                          await api.moderateMedia(eventId, item.id, "approved");
+                          await refresh();
+                          notify("Memory approved");
+                        } catch (e) {
+                          notify(
+                            e instanceof Error
+                              ? e.message
+                              : "Moderation failed",
+                          );
+                        }
                       }}
                     >
                       <Check size={15} />
                       Approve
+                    </button>
+                  )}
+                  {item.status !== "rejected" && (
+                    <button
+                      onClick={async () => {
+                        try {
+                          await api.moderateMedia(eventId, item.id, "rejected");
+                          await refresh();
+                          notify("Photo hidden from guests");
+                        } catch (e) {
+                          notify(
+                            e instanceof Error
+                              ? e.message
+                              : "Moderation failed",
+                          );
+                        }
+                      }}
+                    >
+                      Reject / hide
                     </button>
                   )}
                   <a
@@ -2179,6 +2212,33 @@ function Memories({ notify }: { notify: (s: string) => void }) {
                   </a>
                 </div>
               </div>
+              {item.mime_type.startsWith("image/") && (
+                <label className="media-sharing">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(item.share_with_guests)}
+                    onChange={async (e) => {
+                      try {
+                        await api.moderateMedia(
+                          eventId,
+                          item.id,
+                          item.status,
+                          e.target.checked,
+                        );
+                        await refresh();
+                        notify("Photo sharing preference saved");
+                      } catch (e) {
+                        notify(
+                          e instanceof Error
+                            ? e.message
+                            : "Could not update sharing",
+                        );
+                      }
+                    }}
+                  />
+                  Permission to share with invited guests after approval
+                </label>
+              )}
               <em className={item.status}>
                 {item.status === "pending" ? "Needs review" : item.status}
               </em>
@@ -2739,6 +2799,9 @@ function SettingsPage({ notify }: { notify: (s: string) => void }) {
                 <option value="draft">Draft</option>
                 <option value="live">Live</option>
                 <option value="completed">Completed</option>
+                <option value="preview">Preview</option>
+                <option value="active">Active</option>
+                <option value="archived">Archived</option>
               </select>
             </label>
             <label>
@@ -2746,15 +2809,17 @@ function SettingsPage({ notify }: { notify: (s: string) => void }) {
               <input
                 id="setting-date"
                 type="date"
-                defaultValue={event?.starts_at?.slice(0, 10) || ""}
+                defaultValue={
+                  event?.starts_at
+                    ? dateInTimezone(
+                        event.starts_at,
+                        event.timezone || "Africa/Lagos",
+                      )
+                    : ""
+                }
               />
             </label>
-            <label>
-              Time zone
-              <select>
-                <option>Africa/Lagos · WAT</option>
-              </select>
-            </label>
+
             <label className="full">
               Primary location
               <input
@@ -2980,6 +3045,12 @@ function SettingsPage({ notify }: { notify: (s: string) => void }) {
         </section>
       </div>
       <PaymentsPanel eventId={eventId} />
+      <AuditPanel eventId={eventId} />
+      <GuestMediaSettings
+        eventId={eventId}
+        settings={JSON.parse(event?.settings_json || "{}")}
+        onSaved={refresh}
+      />
       <EventPrivacy />
     </div>
   );
@@ -3180,7 +3251,10 @@ function NewEvent({
 function AppShell() {
   if (location.pathname.startsWith("/invite/")) return <PublicInvite />;
   const { event, user, createFirst, error, saving, refresh } = useEventStore();
-  const [page, setPage] = useState<PageKey>("overview");
+  const [page, setRawPage] = useState<PageKey>("overview");
+  const setPage = (next: PageKey) => {
+    if (next === page || confirmNavigation()) setRawPage(next);
+  };
   const [mobile, setMobile] = useState(false);
   const [newEvent, setNewEvent] = useState(false);
   const [toast, setToast] = useState("");
@@ -3212,7 +3286,7 @@ function AppShell() {
     }
   }, []);
   useEffect(() => {
-    setPage(
+    setRawPage(
       event?.member_role === "checkin_staff"
         ? "checkin"
         : event?.member_role === "designer"
@@ -3439,6 +3513,11 @@ function AccessPortal() {
   const [mode, setMode] = useState<"login" | "register">("register");
   const [busy, setBusy] = useState(false);
   const [forgot, setForgot] = useState(false);
+  const [challenge, setChallenge] = useState<string>();
+  if (challenge)
+    return (
+      <MfaLogin challenge={challenge} onBack={() => setChallenge(undefined)} />
+    );
   const resetToken = new URLSearchParams(location.search).get("reset");
   if (resetToken) return <ResetPassword token={resetToken} />;
   if (forgot) return <ForgotPassword onBack={() => setForgot(false)} />;
@@ -3491,11 +3570,12 @@ function AccessPortal() {
               setBusy(true);
               const form = new FormData(e.currentTarget);
               try {
-                await authenticate(mode, {
+                const challenge = await authenticate(mode, {
                   name: String(form.get("name") || ""),
                   email: String(form.get("email")),
                   password: String(form.get("password")),
                 });
+                setChallenge(challenge);
               } catch {
               } finally {
                 setBusy(false);
@@ -3517,13 +3597,15 @@ function AccessPortal() {
               <input
                 name="password"
                 type="password"
+                aria-label="Password"
+                aria-describedby="access-password-hint"
                 required
                 minLength={10}
                 autoComplete={
                   mode === "register" ? "new-password" : "current-password"
                 }
               />
-              <small>At least 10 characters</small>
+              <small id="access-password-hint">At least 10 characters</small>
             </label>
             {mode === "login" && (
               <button

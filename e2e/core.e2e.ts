@@ -1,4 +1,12 @@
-import { test, expect } from "@playwright/test";
+import { test as base, expect } from "@playwright/test";
+// Each story models a separate client; unrelated CI users must not share the local IP's auth bucket.
+// Cloudflare supplies this header in production. This override is for the local Worker fixture only.
+const test = base.extend({
+  extraHTTPHeaders: async ({}, use) => {
+    const bytes = crypto.getRandomValues(new Uint8Array(2));
+    await use({ "cf-connecting-ip": `198.18.${bytes[0]}.${bytes[1]}` });
+  },
+});
 
 test("organizer edits persisted content and the guest sees only real assigned occasions", async ({
   page,
@@ -184,10 +192,12 @@ test("account verification, export, and password changes are reachable without o
     page.getByRole("button", { name: "Sign in", exact: true }),
   ).toBeVisible();
   const oldLogin = await page.request.post("/api/v1/auth/login", {
+    maxRetries: 2,
     data: { email, password },
   });
   expect(oldLogin.status()).toBe(401);
   const newLogin = await page.request.post("/api/v1/auth/login", {
+    maxRetries: 2,
     data: { email, password: "Changed-Password-2026!" },
   });
   expect(newLogin.status()).toBe(200);
@@ -382,4 +392,196 @@ test("checkout retries preserve intent and restore the receipt after reload (moc
   await page.getByRole("button", { name: "Continue to Paystack" }).click();
   await expect.poll(() => keys.length).toBe(3);
   expect(keys[2]).not.toBe(keys[0]);
+});
+
+test("authenticator enrollment, recovery sign-in and disabling are wired end to end", async ({
+  page,
+}) => {
+  const { totp } = await import("../worker/src/totp");
+  const email = `mfa-${crypto.randomUUID()}@example.com`,
+    password = "Authenticator-Password-2026!";
+  expect(
+    (
+      await page.request.post("/api/v1/auth/register", {
+        data: { name: "MFA Owner", email, password },
+      })
+    ).status(),
+  ).toBe(201);
+  await page.goto("/app/account");
+  await page.getByLabel("Password for authenticator changes").fill(password);
+  await page.getByRole("button", { name: "Set up authenticator" }).click();
+  await expect(page.getByAltText("Authenticator setup QR")).toHaveAttribute(
+    "src",
+    /^data:image\/png/,
+  );
+  const secret = (await page.locator("code.recovery-codes").textContent())!;
+  await page
+    .getByLabel("Authenticator or recovery code")
+    .fill(await totp(secret, Math.floor(Date.now() / 30000)));
+  await page.getByRole("button", { name: "Confirm and enable MFA" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Save your recovery codes now" }),
+  ).toBeVisible();
+  const codes = (await page.locator("pre.recovery-codes").textContent())!
+    .trim()
+    .split("\n");
+  expect(codes).toHaveLength(10);
+  await page
+    .getByRole("button", { name: "I saved my codes — sign in" })
+    .click();
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await page.getByLabel("Email address", { exact: true }).fill(email);
+  await page.getByLabel("Password", { exact: true }).fill(password);
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Confirm your sign-in" }),
+  ).toBeVisible();
+  await page.getByLabel("Authenticator or recovery code").fill(codes[0]);
+  await page.getByRole("button", { name: "Verify sign-in" }).click();
+  await expect(
+    page.getByRole("button", { name: "Create my event" }),
+  ).toBeVisible();
+  await page.goto("/app/account");
+  await expect(
+    page.getByText("Enabled · 9 recovery codes remaining"),
+  ).toBeVisible();
+  await page.getByLabel("Password for authenticator changes").fill(password);
+  await page.getByLabel("Authenticator or recovery code").fill(codes[1]);
+  page.on("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Disable MFA" }).click();
+  await expect(
+    page.getByRole("button", { name: "Sign in", exact: true }),
+  ).toBeVisible();
+});
+
+test("invited guests submit, staff moderate and guests withdraw shared photos", async ({
+  page,
+  context,
+}) => {
+  const password = "Photo-Owner-Password-2026!";
+  await page.request.post("/api/v1/auth/register", {
+    data: {
+      name: "Photo Owner",
+      email: `photos-${crypto.randomUUID()}@example.com`,
+      password,
+    },
+  });
+  const event = (
+    await (
+      await page.request.post("/api/v1/events", {
+        data: {
+          title: "Guest photo event",
+          eventType: "custom",
+          date: "2027-06-16",
+          timezone: "Africa/Lagos",
+          location: "Lagos",
+        },
+      })
+    ).json()
+  ).event;
+  await page.request.put(`/api/v1/events/${event.id}/schedule/sync`, {
+    headers: { "If-Match": "1" },
+    data: { schedule: [{ title: "Dinner", time: "18:00", place: "Hall" }] },
+  });
+  await page.request.patch(`/api/v1/events/${event.id}`, {
+    data: { lifecycle: "published" },
+  });
+  const guest = await (
+    await page.request.post(`/api/v1/events/${event.id}/guests`, {
+      data: { name: "Photographer guest" },
+    })
+  ).json();
+  const other = await (
+    await page.request.post(`/api/v1/events/${event.id}/guests`, {
+      data: { name: "Viewing guest" },
+    })
+  ).json();
+  await page.goto("/app");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByLabel("Allow guest photo uploads").check();
+  await page
+    .getByLabel("Show approved, shareable photos to invited guests")
+    .check();
+  await page.getByRole("button", { name: "Save photo settings" }).click();
+  await expect(page.getByText("Guest photo settings saved.")).toBeVisible();
+  const base = new URL(page.url()).origin,
+    guestContext = await context.browser()!.newContext(),
+    guestPage = await guestContext.newPage(),
+    viewPage = await guestContext.newPage();
+  await guestPage.goto(`${base}/invite/${event.slug}?token=${guest.token}`);
+  await guestPage
+    .getByLabel("Photo (JPEG, PNG or WebP, up to 10 MB)", { exact: true })
+    .setInputFiles({
+      name: "photo.png",
+      mimeType: "image/png",
+      buffer: Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aGXsAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    });
+  await guestPage
+    .getByLabel("Photo caption", { exact: true })
+    .fill("Our shared celebration");
+  await guestPage
+    .getByLabel("I have permission to upload this photo", { exact: false })
+    .check();
+  await guestPage
+    .getByRole("button", { name: "Submit photo for review" })
+    .click();
+  await expect(
+    guestPage.getByText("Photo submitted for organizer review.", {
+      exact: false,
+    }),
+  ).toBeVisible();
+  await viewPage.goto(`${base}/invite/${event.slug}?token=${other.token}`);
+  await expect(viewPage.getByAltText("Our shared celebration")).toHaveCount(0);
+  await page.reload();
+  await page.getByRole("button", { name: "Memories", exact: true }).click();
+  await page.getByRole("button", { name: "Approve", exact: true }).click();
+  await expect(
+    page.getByText("Memory approved", { exact: true }),
+  ).toBeVisible();
+  await viewPage.getByRole("button", { name: "Refresh photos" }).click();
+  await expect(viewPage.getByAltText("Our shared celebration")).toBeVisible();
+  guestPage.on("dialog", (dialog) => dialog.accept());
+  await guestPage.getByRole("button", { name: "Withdraw photo" }).click();
+  await expect(
+    guestPage.getByText("Photo withdrawn.", { exact: false }),
+  ).toBeVisible();
+  await viewPage.getByRole("button", { name: "Refresh photos" }).click();
+  await expect(viewPage.getByAltText("Our shared celebration")).toHaveCount(0);
+  await guestContext.close();
+});
+
+test("internal navigation asks before discarding unsaved invitation edits", async ({
+  page,
+}) => {
+  await page.request.post("/api/v1/auth/register", {
+    data: {
+      name: "Editor",
+      email: `editor-${crypto.randomUUID()}@example.com`,
+      password: "Editor-Password-2026!",
+    },
+  });
+  await page.request.post("/api/v1/events", {
+    data: {
+      title: "Unsaved edit test",
+      eventType: "custom",
+      date: "2027-06-16",
+      timezone: "Africa/Lagos",
+      location: "Lagos",
+    },
+  });
+  await page.goto("/app");
+  await page.getByRole("button", { name: "Experience", exact: true }).click();
+  await page.getByRole("button", { name: "Add section", exact: true }).click();
+  await page.getByLabel("Section heading").fill("Keep my edits");
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(page.getByLabel("Section heading")).toHaveValue("Keep my edits");
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Event settings", exact: true }),
+  ).toBeVisible();
 });

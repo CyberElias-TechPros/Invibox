@@ -1,3 +1,4 @@
+import MfaPanel from "./MfaPanel";
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { download } from "./files";
@@ -235,6 +236,7 @@ export default function AccountPage() {
           </button>
         </form>
       </section>
+      <MfaPanel />
       <section className="card content-editor">
         <h2>Delete account</h2>
         <p>
