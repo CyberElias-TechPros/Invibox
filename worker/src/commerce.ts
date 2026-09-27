@@ -22,7 +22,7 @@ function payoutKey(env: Bindings) {
     });
   return env.PAYOUT_VERIFICATION_KEY;
 }
-export async function paystack(env: Bindings, path: string, body?: unknown) {
+async function paystackResponse(env: Bindings, path: string, body?: unknown) {
   if (!env.PAYSTACK_SECRET_KEY)
     throw new HTTPException(503, { message: "Paystack is not configured" });
   try {
@@ -41,7 +41,7 @@ export async function paystack(env: Bindings, path: string, body?: unknown) {
         message:
           "Paystack could not complete this request. Verify the existing reference before retrying.",
       });
-    return data.data;
+    return data;
   } catch (error) {
     if (error instanceof HTTPException) throw error;
     throw new HTTPException(502, {
@@ -49,6 +49,55 @@ export async function paystack(env: Bindings, path: string, body?: unknown) {
         "Paystack is unavailable. Reconcile existing requests before retrying.",
     });
   }
+}
+export async function paystack(env: Bindings, path: string, body?: unknown) {
+  return (await paystackResponse(env, path, body)).data;
+}
+async function payoutBanks(env: Bindings) {
+  // Paystack limits bank pages to 100. Follow opaque cursors instead of silently hiding later banks.
+  // https://paystack.com/docs/api/miscellaneous/#bank
+  const banks = new Map<string, any>(),
+    seen = new Set<string>();
+  let cursor = "";
+  for (let page = 0; page < 10; page++) {
+    const result = await paystackResponse(
+      env,
+      `/bank?country=nigeria&currency=NGN&use_cursor=true&perPage=100${cursor ? `&next=${encodeURIComponent(cursor)}` : ""}`,
+    );
+    if (!Array.isArray(result.data))
+      throw new HTTPException(502, {
+        message: "Bank catalog response is invalid",
+      });
+    for (const bank of result.data) {
+      if (
+        typeof bank.name === "string" &&
+        /^[0-9]{3,10}$/.test(bank.code) &&
+        bank.active !== false &&
+        bank.is_deleted !== true &&
+        (!bank.currency || bank.currency === "NGN")
+      )
+        banks.set(bank.code, { code: bank.code, name: bank.name });
+    }
+    const next = result.meta?.next;
+    if (next == null && (result.meta || result.data.length < 100))
+      return [...banks.values()].sort((a, b) => a.name.localeCompare(b.name));
+    if (
+      typeof next !== "string" ||
+      !next ||
+      next.length > 1024 ||
+      seen.has(next)
+    )
+      throw new HTTPException(502, {
+        message:
+          "Bank catalog pagination could not be completed. Try again later.",
+      });
+    seen.add(next);
+    cursor = next;
+  }
+  throw new HTTPException(502, {
+    message:
+      "Bank catalog exceeded the provider pagination limit. Contact the operator.",
+  });
 }
 async function owner(c: Context<AppEnv>) {
   const event = await c.env.DB.prepare(
@@ -439,10 +488,7 @@ export function registerCommerceRoutes(
   );
   app.get("/api/v1/account/payout/banks", authenticate, rateLimit, async (c) =>
     c.json({
-      banks: await paystack(
-        c.env,
-        "/bank?country=nigeria&currency=NGN&perPage=100",
-      ),
+      banks: await payoutBanks(c.env),
     }),
   );
   app.post("/api/v1/account/payout", authenticate, rateLimit, async (c) => {
@@ -474,10 +520,7 @@ export function registerCommerceRoutes(
         message:
           "A payout request already exists. Contact the platform operator to reconcile or replace it; do not create duplicate accounts.",
       });
-    const banks = await paystack(
-      c.env,
-      "/bank?country=nigeria&currency=NGN&perPage=100",
-    );
+    const banks = await payoutBanks(c.env);
     const bank = banks.find((b: any) => b.code === body.bankCode);
     if (!bank)
       throw new HTTPException(422, {

@@ -2471,3 +2471,63 @@ test("legacy merchant-only payment reservations cannot initialize or reopen chec
     f.DB.sqlite.close();
   }
 });
+
+test("bank onboarding catalog follows provider cursors, filters inactive entries and rejects pagination loops", async () => {
+  const f = await commerceFixture(),
+    original = globalThis.fetch;
+  let requests = 0;
+  globalThis.fetch = async (url) => {
+    requests++;
+    const cursor = new URL(url).searchParams.get("next");
+    assert.equal(new URL(url).searchParams.get("use_cursor"), "true");
+    return new Response(
+      JSON.stringify({
+        status: true,
+        data: cursor
+          ? [
+              {
+                code: "057",
+                name: "Zenith Bank",
+                active: true,
+                currency: "NGN",
+              },
+            ]
+          : [
+              { code: "058", name: "Test Bank", active: true },
+              { code: "999", name: "Unavailable Bank", active: false },
+              { code: "998", name: "Deleted Bank", is_deleted: true },
+            ],
+        meta: { next: cursor ? null : "bank:cursor/=" },
+      }),
+    );
+  };
+  try {
+    const response = await call(
+      f.env,
+      "/account/payout/banks",
+      undefined,
+      f.cookie,
+    );
+    assert.equal(response.status, 200);
+    assert.deepEqual(
+      (await response.json()).banks.map((b) => b.code),
+      ["058", "057"],
+    );
+    assert.equal(requests, 2);
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          status: true,
+          data: [],
+          meta: { next: "repeated-cursor" },
+        }),
+      );
+    assert.equal(
+      (await call(f.env, "/account/payout/banks", undefined, f.cookie)).status,
+      502,
+    );
+  } finally {
+    globalThis.fetch = original;
+    f.DB.sqlite.close();
+  }
+});
