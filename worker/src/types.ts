@@ -7,6 +7,8 @@ export type Bindings = {
   APP_ORIGIN: string;
   DEMO_MODE: string;
   SESSION_PEPPER?: string;
+  MFA_ENCRYPTION_KEY?: string;
+  PAYOUT_VERIFICATION_KEY?: string;
   PAYSTACK_SECRET_KEY?: string;
   RESEND_API_KEY?: string;
   EMAIL_FROM?: string;
@@ -20,7 +22,18 @@ export type Bindings = {
   AI_API_KEY?: string;
   AI_BASE_URL?: string;
   AI_MODEL?: string;
+  TURNSTILE_SECRET_KEY?: string;
+  TAX_RATE_BPS?: string;
+  RESEND_WEBHOOK_SECRET?: string;
 };
 export type Variables = { userId: string; requestId: string };
 export type AppEnv = { Bindings: Bindings; Variables: Variables };
-export type NotificationJob = { id:string; eventId:string; channel:'email'|'sms'|'whatsapp'; audience:string; message:string; createdAt:string; offset?:number };
+export type NotificationJob = {
+  id: string;
+  eventId: string;
+  channel: "email" | "sms" | "whatsapp";
+  audience: string;
+  message: string;
+  createdAt: string;
+  cursor?: string;
+};
