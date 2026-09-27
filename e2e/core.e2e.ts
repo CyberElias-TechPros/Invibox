@@ -780,6 +780,9 @@ test("commerce operator UI submits explicit catalog approval and identity review
   await expect(
     page.getByRole("heading", { name: "Commerce operations" }),
   ).toBeVisible();
+  await expect(
+    page.getByRole("combobox", { name: "Package", exact: true }).locator("option"),
+  ).toContainText(["Essential"], { timeout: 10000 });
   await page.getByRole("combobox", { name: "Package", exact: true }).selectOption("essential");
   await page.getByLabel("Price (NGN)", { exact: true }).fill("8000");
   await page
