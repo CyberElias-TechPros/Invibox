@@ -29,7 +29,7 @@ jobs:
           npm run smoke || (echo "smoke failed"; echo "=== worker.log ==="; cat /tmp/worker.log; echo "=== vite.log ==="; cat /tmp/vite.log; echo "::error::smoke failed $(tail -n 50 /tmp/worker.log | tr '\n' ' ')"; exit 1)
           npm run test:regression || (echo "regression failed"; echo "=== worker.log ==="; cat /tmp/worker.log; echo "::error::regression failed $(tail -n 50 /tmp/worker.log | tr '\n' ' ')"; exit 1)
           npx playwright install --with-deps chromium
-          npm run test:e2e || (echo "e2e failed"; echo "=== worker.log ==="; cat /tmp/worker.log; echo "=== vite.log ==="; cat /tmp/vite.log; ls test-results || true; cat test-results/*/error-context.md 2>/dev/null | head -n 200 || true; echo "::error::e2e failed"; exit 1)
+          npm run test:e2e 2>&1 | tee /tmp/e2e.log || (echo "e2e failed"; echo "=== e2e.log ==="; cat /tmp/e2e.log; echo "=== worker.log ==="; cat /tmp/worker.log; echo "=== vite.log ==="; cat /tmp/vite.log; ls test-results || true; cat test-results/*/error-context.md 2>/dev/null | head -n 500 || true; echo "::error::e2e failed"; cat /tmp/e2e.log | tail -n 100 | tr '\n' ' ' | xargs -0 -I{} echo "::error::e2e tail {}"; exit 1)
       - name: Show logs on failure
         if: failure()
         run: |
