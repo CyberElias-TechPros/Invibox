@@ -31,7 +31,7 @@ jobs:
       - name: E2E test
         run: |
           npx playwright install --with-deps chromium
-          npm run test:e2e -- --retries=2
+          npm run test:e2e -- --retries=2 2>&1 | tee /tmp/e2e.log; status=${PIPESTATUS[0]}; echo "=== e2e.log tail ==="; tail -n 200 /tmp/e2e.log; echo "=== test-results ==="; ls -R test-results 2>&1 | head -n 200; cat test-results/*/error-context.md 2>/dev/null | head -n 500 || true; exit $status
       - name: Show logs on failure
         if: failure()
         run: |
