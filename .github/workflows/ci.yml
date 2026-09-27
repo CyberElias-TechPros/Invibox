@@ -19,13 +19,20 @@ jobs:
       - run: npm run db:migrate:local
       - name: Full-stack smoke test
         run: |
+          rm -rf .wrangler
+          npm run db:migrate:local
           npm run worker:dev > /tmp/worker.log 2>&1 &
           npm run dev > /tmp/vite.log 2>&1 &
-          npx wait-on http-get://localhost:8787/api/v1/health http-get://localhost:5173
-          npm run smoke
-          npm run test:regression
+          npx wait-on --timeout 60000 http-get://localhost:8787/api/v1/health http-get://localhost:5173 || (echo "=== worker.log ==="; cat /tmp/worker.log; echo "=== vite.log ==="; cat /tmp/vite.log; exit 1)
+          npm run smoke || (echo "=== worker.log ==="; cat /tmp/worker.log; echo "=== vite.log ==="; cat /tmp/vite.log; exit 1)
+          npm run test:regression || (echo "=== worker.log ==="; cat /tmp/worker.log; exit 1)
           npx playwright install --with-deps chromium
-          npm run test:e2e
+          npm run test:e2e || (echo "=== worker.log ==="; cat /tmp/worker.log; echo "=== vite.log ==="; cat /tmp/vite.log; exit 1)
+      - name: Upload logs on failure
+        if: failure()
+        run: |
+          echo "=== worker.log ==="; cat /tmp/worker.log || true
+          echo "=== vite.log ==="; cat /tmp/vite.log || true
       - run: npm audit --audit-level=high
       - run: npm run build
       - run: npx wrangler deploy --dry-run
