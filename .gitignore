@@ -6,3 +6,9 @@ dist/
 .env.*
 !.env.example
 .DS_Store
+
+.dev.vars
+.dev.vars.*
+playwright-report/
+test-results/
+wrangler.production.toml

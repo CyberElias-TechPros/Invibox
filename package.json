@@ -9,28 +9,42 @@
     "preview": "vite preview --host 0.0.0.0",
     "typecheck": "tsc -b && tsc -p worker/tsconfig.json",
     "test": "vitest run",
-    "worker:dev": "wrangler dev --local --port 8787",
+    "worker:dev": "wrangler dev --local --ip 0.0.0.0 --port 8787",
     "db:migrate:local": "wrangler d1 migrations apply invibox-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply invibox-db --remote",
-    "smoke": "bash scripts/smoke.sh"
+    "smoke": "bash scripts/smoke.sh",
+    "test:regression": "node scripts/regression.mjs",
+    "test:e2e": "playwright test",
+    "configure:production": "node scripts/configure-production.mjs",
+    "format": "prettier --write \"src/**/*.{ts,tsx}\" \"worker/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx}\" \"worker/**/*.ts\"",
+    "test:database": "node --test scripts/database-tests.mjs"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "latest",
-    "framer-motion": "latest",
-    "hono": "^4.13.8",
-    "lucide-react": "latest",
-    "react": "latest",
-    "react-dom": "latest",
-    "typescript": "latest",
-    "vite": "latest",
-    "zod": "^4.6.5"
+    "@vitejs/plugin-react": "6.1.1",
+    "framer-motion": "13.4.0",
+    "hono": "4.13.8",
+    "lucide-react": "1.46.0",
+    "qrcode": "1.5.4",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "typescript": "7.0.2",
+    "vite": "8.3.0",
+    "zod": "4.6.5"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^5.20260917.1",
-    "@types/react": "latest",
-    "@types/react-dom": "latest",
-    "vitest": "^5.0.1",
-    "wait-on": "^9.1.0",
-    "wrangler": "^4.133.0"
+    "@cloudflare/workers-types": "5.20260917.1",
+    "@playwright/test": "1.63.0",
+    "@types/qrcode": "1.5.6",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "esbuild": "0.28.1",
+    "prettier": "3.6.2",
+    "vitest": "5.0.1",
+    "wait-on": "9.1.0",
+    "wrangler": "4.133.0"
+  },
+  "engines": {
+    "node": ">=22.13.0"
   }
 }

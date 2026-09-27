@@ -11,7 +11,7 @@ curl -fsS -b "$TMP/cookies" -X POST -H 'Content-Type: application/json' \
   --data '{"title":"Smoke Celebration","eventType":"wedding","date":"2027-02-14","location":"Lagos, Nigeria","timezone":"Africa/Lagos"}' "$BASE/events" > "$TMP/event.json"
 EVENT_ID=$(json "$TMP/event.json" 'x.event.id'); SLUG=$(json "$TMP/event.json" 'x.event.slug')
 
-curl -fsS -b "$TMP/cookies" -X PUT -H 'Content-Type: application/json' \
+curl -fsS -b "$TMP/cookies" -X PUT -H 'Content-Type: application/json' -H 'If-Match: 1' \
   --data '{"schedule":[{"time":"14:00","title":"Main celebration","place":"Lagos","audience":"All guests"}]}' "$BASE/events/$EVENT_ID/schedule/sync" >/dev/null
 curl -fsS -b "$TMP/cookies" -X PATCH -H 'Content-Type: application/json' \
   --data '{"lifecycle":"published"}' "$BASE/events/$EVENT_ID" >/dev/null
