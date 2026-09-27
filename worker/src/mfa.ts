@@ -44,7 +44,7 @@ export async function loginChallenge(
   c.header("Set-Cookie", clearCookie());
   return c.json({ mfaRequired: true, challengeToken: challenge });
 }
-async function proof(
+export async function proof(
   c: Context<AppEnv>,
   userId: string,
   code: string,

@@ -47,3 +47,8 @@ Start with the [readiness review and remaining work](docs/READINESS.md). [Deploy
 - [Operations](docs/OPERATIONS.md)
 - [Audit](docs/AUDIT.md)
 - [Implementation status](IMPLEMENTATION.md)
+
+
+### Free packages, paid capacity and organizer payouts
+
+Events start on an enforced free allowance. Settings → **Packages & usage** shows capacity and proposed paid packages/packs; paid entries are disabled until an operator approves their prices and availability. Account & security contains organizer bank onboarding. Guest contributions require a verified organizer subaccount and do not fall back to the platform merchant. Package revenue uses a separate ledger. See [commerce setup, prices, recovery and remaining launch gates](docs/COMMERCE.md); apply migration 0013 and provision the payout verification secret before onboarding. Refund/dispute automation and tax/accounting workflows remain unfinished.

@@ -1,14 +1,14 @@
+import { contributionMatches } from "./commerce";
 import type { Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
 import type { AppEnv, Bindings } from "./types";
 import { json } from "./validation";
 import { sha256, uid } from "./security";
-import { paymentMatches } from "./domain";
 
 export async function reconcilePayment(env: Bindings, reference: string) {
   let payment = await env.DB.prepare(
-    "SELECT id,reference,purpose,amount_minor,currency,status,paid_at,initialization_state FROM payments WHERE reference=?",
+    "SELECT id,reference,purpose,amount_minor,currency,status,paid_at,initialization_state,subaccount_code FROM payments WHERE reference=?",
   )
     .bind(reference)
     .first<any>();
@@ -30,14 +30,18 @@ export async function reconcilePayment(env: Bindings, reference: string) {
       },
     );
     const result: any = await response.json();
-    if (response.ok && result.status && paymentMatches(payment, result.data)) {
+    if (
+      response.ok &&
+      result.status &&
+      contributionMatches(payment, result.data)
+    ) {
       await env.DB.prepare(
         "UPDATE payments SET status='paid',paid_at=COALESCE(paid_at,CURRENT_TIMESTAMP),updated_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('pending','initialized')",
       )
         .bind(payment.id)
         .run();
       payment = await env.DB.prepare(
-        "SELECT id,reference,purpose,amount_minor,currency,status,paid_at,initialization_state FROM payments WHERE id=?",
+        "SELECT id,reference,purpose,amount_minor,currency,status,paid_at,initialization_state,subaccount_code FROM payments WHERE id=?",
       )
         .bind(payment.id)
         .first<any>();
@@ -77,7 +81,7 @@ export async function initializePayment(c: Context<AppEnv>) {
       message: "A stable payment Idempotency-Key is required",
     });
   const event = await c.env.DB.prepare(
-    "SELECT e.id,e.visibility,e.settings_json,u.email_verified_at FROM events e JOIN users u ON u.id=e.owner_id WHERE slug=? AND lifecycle IN ('published','active','live')",
+    "SELECT e.id,e.owner_id,e.visibility,e.settings_json,u.email_verified_at FROM events e JOIN users u ON u.id=e.owner_id WHERE slug=? AND lifecycle IN ('published','active','live')",
   )
     .bind(body.slug)
     .first<any>();
@@ -103,6 +107,16 @@ export async function initializePayment(c: Context<AppEnv>) {
     throw new HTTPException(409, {
       message: "Gifting is not enabled for this event",
     });
+  const payout = await c.env.DB.prepare(
+    "SELECT subaccount_code FROM payout_accounts WHERE user_id=? AND state='verified'",
+  )
+    .bind(event.owner_id)
+    .first<{ subaccount_code: string }>();
+  if (!payout?.subaccount_code)
+    throw new HTTPException(409, {
+      message:
+        "The organizer must complete verified payout onboarding before accepting contributions. No fallback to the platform merchant is allowed.",
+    });
   const amountMinor = Math.round(body.amount * 100);
   const payloadHash = await sha256(
     JSON.stringify({
@@ -114,7 +128,7 @@ export async function initializePayment(c: Context<AppEnv>) {
     }),
   );
   await c.env.DB.prepare(
-    "INSERT INTO payments(id,event_id,guest_id,provider,reference,purpose,amount_minor,status,request_key,request_hash,initialization_state) VALUES(?,?,?,'paystack',?,?,?,'pending',?,?,'reserved') ON CONFLICT DO NOTHING",
+    "INSERT INTO payments(id,event_id,guest_id,provider,reference,purpose,amount_minor,status,request_key,request_hash,initialization_state,subaccount_code) VALUES(?,?,?,'paystack',?,?,?,'pending',?,?,'reserved',?) ON CONFLICT DO NOTHING",
   )
     .bind(
       uid("pmt"),
@@ -125,6 +139,7 @@ export async function initializePayment(c: Context<AppEnv>) {
       amountMinor,
       requestKey,
       payloadHash,
+      payout.subaccount_code,
     )
     .run();
   let payment = await c.env.DB.prepare(
@@ -143,6 +158,14 @@ export async function initializePayment(c: Context<AppEnv>) {
       status: payment.status,
       message:
         "This contribution already has a final status. No new charge was created.",
+    });
+  if (
+    !payment.subaccount_code ||
+    payment.subaccount_code !== payout.subaccount_code
+  )
+    throw new HTTPException(409, {
+      message:
+        "This existing payment uses a previous payout route. The organizer must reconcile it before any new checkout; do not pay twice.",
     });
   if (payment.checkout_url)
     return c.json({
@@ -191,6 +214,9 @@ export async function initializePayment(c: Context<AppEnv>) {
           amount: amountMinor,
           currency: "NGN",
           reference: payment.reference,
+          subaccount: payment.subaccount_code,
+          transaction_charge: 0,
+          bearer: "subaccount",
           callback_url: `${c.env.APP_ORIGIN}/invite/${body.slug}?payment=${encodeURIComponent(payment.reference)}`,
           metadata: {
             event_id: event.id,

@@ -585,3 +585,230 @@ test("internal navigation asks before discarding unsaved invitation edits", asyn
     page.getByRole("heading", { name: "Event settings", exact: true }),
   ).toBeVisible();
 });
+
+test("organizer sees enforced free limits, disabled draft packages and payout onboarding", async ({
+  page,
+}) => {
+  const registered = await page.request.post("/api/v1/auth/register", {
+    data: {
+      name: "Package Organizer",
+      email: `packages-${crypto.randomUUID()}@example.com`,
+      password: "Browser-Test-2026!",
+    },
+  });
+  expect(registered.status()).toBe(201);
+  const created = await page.request.post("/api/v1/events", {
+    data: {
+      title: "Package test event",
+      eventType: "custom",
+      date: "2027-06-16",
+      timezone: "Africa/Lagos",
+      location: "Lagos",
+    },
+  });
+  const event = (await created.json()).event;
+  expect(
+    (
+      await page.request.post(`/api/v1/events/${event.id}/guests`, {
+        data: { name: "Family A", party: 30 },
+      })
+    ).status(),
+  ).toBe(201);
+  expect(
+    (
+      await page.request.post(`/api/v1/events/${event.id}/guests`, {
+        data: { name: "Family B", party: 21 },
+      })
+    ).status(),
+  ).toBe(409);
+  await page.goto("/app");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Packages & usage" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Current package: free", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("30 / 50", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Buy Essential", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    page.getByText("No package purchases yet.", { exact: true }),
+  ).toBeVisible();
+  await page.goto("/app/account");
+  await expect(
+    page.getByRole("heading", { name: "Organizer payout account" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Submit for payout review" }),
+  ).toBeDisabled();
+  await page
+    .getByRole("button", { name: "Load supported Nigerian banks" })
+    .click();
+  await expect(
+    page.getByText("Paystack is not configured", { exact: true }),
+  ).toBeVisible();
+  await page.goto("/pricing");
+  await expect(
+    page.getByRole("heading", { name: "Essential", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("DRAFT · NOT ON SALE", { exact: true }),
+  ).toHaveCount(6);
+});
+
+test("checkout return does not grant a package and recovery UI waits for server verification", async ({
+  page,
+}) => {
+  await page.request.post("/api/v1/auth/register", {
+    data: {
+      name: "Billing Return",
+      email: `billing-${crypto.randomUUID()}@example.com`,
+      password: "Browser-Test-2026!",
+    },
+  });
+  const created = await page.request.post("/api/v1/events", {
+    data: {
+      title: "Billing return fixture",
+      eventType: "custom",
+      date: "2027-06-16",
+      timezone: "Africa/Lagos",
+      location: "Lagos",
+    },
+  });
+  const event = (await created.json()).event;
+  const bill = await (
+    await page.request.get(`/api/v1/events/${event.id}/billing`)
+  ).json();
+  let verified = false,
+    initializeRequests = 0;
+  // Browser-only provider fixture. Database tests separately validate signed settlement and exactly-once grants.
+  await page.route(`**/api/v1/events/${event.id}/billing**`, async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/reconcile")) {
+      verified = true;
+      await route.fulfill({ json: { ok: true } });
+      return;
+    }
+    if (path.endsWith("/checkout")) {
+      initializeRequests++;
+      await route.fulfill({ status: 500, json: {} });
+      return;
+    }
+    await route.fulfill({
+      json: {
+        ...bill,
+        entitlement: {
+          ...bill.entitlement,
+          ...(verified
+            ? { plan_code: "essential", tier: 1, guest_limit: 200 }
+            : {}),
+        },
+        orders: [
+          {
+            reference: "bill_browser_fixture",
+            request_key: "browser-fixture-stable-key",
+            product_code: "essential",
+            amount_minor: 750000,
+            status: verified ? "paid" : "uncertain",
+            paid_at: verified ? "2026-09-27 12:00:00" : null,
+          },
+        ],
+      },
+    });
+  });
+  await page.goto(`/app?billing=bill_browser_fixture&billingEvent=${event.id}`);
+  await expect(
+    page.getByRole("heading", { name: "Package payment status" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Current package: free", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Continue existing checkout" }),
+  ).toHaveCount(0);
+  await page
+    .getByRole("button", { name: "Check payment", exact: true })
+    .click();
+  await expect(
+    page.getByText("Current package: essential", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("0 / 200", { exact: true })).toBeVisible();
+  expect(initializeRequests).toBe(0);
+});
+
+test("commerce operator UI submits explicit catalog approval and identity review with cleared step-up credentials", async ({
+  page,
+}) => {
+  await page.request.post("/api/v1/auth/register", {
+    data: {
+      name: "Operator UI fixture",
+      email: `operator-ui-${crypto.randomUUID()}@example.com`,
+      password: "Browser-Test-2026!",
+    },
+  });
+  // UI-only administrator fixture. Role, password and MFA enforcement are covered against the real Worker in database tests.
+  let updated: any = null,
+    approved: any = null;
+  await page.route("**/api/v1/admin/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/commerce")) {
+      await route.fulfill({
+        json: {
+          accounts: [
+            {
+              user_id: "review-owner",
+              email: "organizer@example.com",
+              bank_name: "Test Bank",
+              account_name: "Test Organizer",
+              last_four: "6789",
+              state: approved ? "verified" : "review",
+              subaccount_code: "ACCT_review",
+            },
+          ],
+          orders: [],
+        },
+      });
+      return;
+    }
+    if (path.includes("/plans/")) updated = route.request().postDataJSON();
+    if (path.endsWith("/verify")) approved = route.request().postDataJSON();
+    await route.fulfill({ json: { ok: true } });
+  });
+  await page.goto("/app/commerce");
+  await expect(
+    page.getByRole("heading", { name: "Commerce operations" }),
+  ).toBeVisible();
+  await page.getByRole("combobox", { name: "Package", exact: true }).selectOption("essential");
+  await page.getByLabel("Price (NGN)", { exact: true }).fill("8000");
+  await page
+    .getByLabel("Password for financial changes", { exact: true })
+    .fill("Browser-Test-2026!");
+  page.on("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Save catalog entry" }).click();
+  await expect.poll(() => updated?.priceMinor).toBe(800000);
+  await expect(
+    page.getByLabel("Password for financial changes", { exact: true }),
+  ).toHaveValue("");
+  await expect(
+    page.getByRole("button", { name: "Verify & approve" }),
+  ).toBeDisabled();
+  await page
+    .getByLabel("Review reason (at least 10 characters)", { exact: true })
+    .fill("Identity and receiving authority reviewed by operator");
+  await page
+    .getByLabel("Password for financial changes", { exact: true })
+    .fill("Browser-Test-2026!");
+  await page
+    .getByLabel(
+      "I have independently reviewed identity and authority to receive these contributions.",
+    )
+    .check();
+  await page.getByRole("button", { name: "Verify & approve" }).click();
+  await expect.poll(() => approved?.identityReviewed).toBe(true);
+  expect(approved.subaccountCode).toBe("ACCT_review");
+  await expect(
+    page.getByLabel("Password for financial changes", { exact: true }),
+  ).toHaveValue("");
+});

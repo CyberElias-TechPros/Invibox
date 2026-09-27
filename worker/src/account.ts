@@ -229,6 +229,11 @@ export function registerAccountRoutes(
       profile,
       memberships: memberships.results,
       ownedEvents: events.results,
+      payout: await c.env.DB.prepare(
+        "SELECT request_id,bank_code,bank_name,account_name,last_four,state,created_at,review_reason FROM payout_accounts WHERE user_id=?",
+      )
+        .bind(user.id)
+        .first(),
       note: "For guest, schedule and media records use the owner-only export in each event. Media bytes and provider-held data are not embedded.",
     });
   });
@@ -279,6 +284,9 @@ export function registerAccountRoutes(
       ),
       c.env.DB.prepare("DELETE FROM team_invitations WHERE email=?").bind(
         user.email,
+      ),
+      c.env.DB.prepare("DELETE FROM payout_accounts WHERE user_id=?").bind(
+        user.id,
       ),
       c.env.DB.prepare("DELETE FROM mfa_credentials WHERE user_id=?").bind(
         user.id,

@@ -64,6 +64,9 @@ export function registerPrivacyRoutes(
         vendors: "SELECT * FROM vendors WHERE event_id=?",
         media:
           "SELECT id,guest_id,mime_type,size_bytes,caption,status,share_with_guests,consent_at,upload_state,created_at FROM media WHERE event_id=?",
+        billingOrders:
+          "SELECT reference,product_code,kind,amount_minor,currency,status,limits_json,created_at,paid_at FROM billing_orders WHERE event_id=?",
+        entitlements: "SELECT * FROM event_entitlements WHERE event_id=?",
         payments:
           "SELECT reference,purpose,amount_minor,currency,status,paid_at,created_at FROM payments WHERE event_id=?",
         announcements:

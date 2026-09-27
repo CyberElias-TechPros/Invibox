@@ -40,6 +40,11 @@ Updated 27 September 2026. The authoritative current assessment is [docs/READINE
 
 ## Not complete
 
-See the explicit code/product backlog in [READINESS.md](docs/READINESS.md#remaining-codeproduct-work--not-solved-by-adding-keys): public SaaS billing/entitlements, phishing-resistant authentication/abuse defenses, refunds/settlement, delivery/bounce callbacks and consent evidence policy, external-provider/backups erasure, guest video/audio and media scanning, true offline operations, transport/accommodation/ticket inventory, advanced visual editing, localization and large-scale operational validation.
+See the explicit code/product backlog in [READINESS.md](docs/READINESS.md#remaining-codeproduct-work--not-solved-by-adding-keys): recurring subscriptions and broader operator case management, phishing-resistant authentication/abuse defenses, refunds/settlement, delivery/bounce callbacks and consent evidence policy, external-provider/backups erasure, guest video/audio and media scanning, true offline operations, transport/accommodation/ticket inventory, advanced visual editing, localization and large-scale operational validation.
 
 No production resources, provider accounts, secrets, legal policies, public deployment or live financial transactions were created by this change.
+
+
+## Commercial requirements follow-up
+
+Implemented free limits, configurable proposed one-time event packages and add-on packs, database quota enforcement, immutable package billing and exactly-once fulfillment, usage/purchase/recovery/receipt screens, public catalog, organizer bank onboarding, administrator KYC review/block/replacement and verified subaccount contribution routing. Paid entries remain inactive until approved; no live provider/KYC/settlement acceptance is claimed. [Commerce workflows and limitations](docs/COMMERCE.md).

@@ -1,3 +1,4 @@
+import { PayoutPanel } from "./Commerce";
 import MfaPanel from "./MfaPanel";
 import { useEffect, useState } from "react";
 import { api } from "./api";
@@ -73,6 +74,12 @@ export default function AccountPage() {
     <main className="account-page">
       <a href="/app">← Back to workspace</a>
       <h1>Account & security</h1>
+      {profile?.role === "admin" && (
+        <p>
+          <a href="/app/commerce">Commerce operations →</a>
+        </p>
+      )}
+      <PayoutPanel />
       {message && (
         <p className="save-banner" role="status">
           {message}

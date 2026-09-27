@@ -8,6 +8,7 @@ export type Bindings = {
   DEMO_MODE: string;
   SESSION_PEPPER?: string;
   MFA_ENCRYPTION_KEY?: string;
+  PAYOUT_VERIFICATION_KEY?: string;
   PAYSTACK_SECRET_KEY?: string;
   RESEND_API_KEY?: string;
   EMAIL_FROM?: string;

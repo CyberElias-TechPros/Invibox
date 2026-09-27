@@ -155,7 +155,7 @@ test("queue retries transient failures, preserves its audience and deduplicates 
   const DB = database(),
     env = makeEnv(DB);
   DB.sqlite.exec(
-    "INSERT INTO users(id,email,password_hash,full_name) VALUES('u','u@example.com','unused','Test');INSERT INTO events(id,owner_id,slug,title,event_type,starts_at,location) VALUES('e','u','test','Test','custom','2027-01-01','Lagos');INSERT INTO guests(id,event_id,name,email,status,email_opt_in) VALUES('g','e','Guest','guest@example.com','attending',1);INSERT INTO guests(id,event_id,name,email,status) VALUES('not-selected','e','Other','other@example.com','pending');INSERT INTO announcements(id,event_id,created_by,channel,audience,message) VALUES('a','e','u','email','pending','Hello');INSERT INTO announcement_recipients(announcement_id,guest_id) VALUES('a','g')",
+    "INSERT INTO users(id,email,password_hash,full_name) VALUES('u','u@example.com','unused','Test');INSERT INTO events(id,owner_id,slug,title,event_type,starts_at,location) VALUES('e','u','test','Test','custom','2027-01-01','Lagos');INSERT INTO guests(id,event_id,name,email,status,email_opt_in) VALUES('g','e','Guest','guest@example.com','attending',1);INSERT INTO guests(id,event_id,name,email,status) VALUES('not-selected','e','Other','other@example.com','pending');INSERT INTO announcements(id,event_id,created_by,channel,audience,message) VALUES('a','e','u','email','pending','Hello');UPDATE event_entitlements SET message_limit=100;INSERT INTO announcement_recipients(announcement_id,guest_id) VALUES('a','g')",
   );
   let deliveries = 0,
     acks = 0,
@@ -226,6 +226,7 @@ test("signed payment webhooks validate currency and process retries atomically",
         amount: 10000,
         currency,
         status: "success",
+        subaccount: { subaccount_code: "ACCT_fixture" },
       },
     });
     return worker.fetch(
@@ -275,6 +276,11 @@ async function ownerFixture() {
   DB.sqlite
     .prepare(
       "INSERT INTO events(id,owner_id,slug,title,event_type,lifecycle,starts_at,location,visibility,settings_json) VALUES('e',?,'test-event','Test event','custom','published','2027-06-16','Lagos','public','{\"capabilities\":[\"gifts\"]}')",
+    )
+    .run(user.id);
+  DB.sqlite
+    .prepare(
+      "INSERT INTO payout_accounts(user_id,request_hash,bank_code,bank_name,account_name,last_four,subaccount_code,state) VALUES(?,'fixture','058','Test Bank','Account Owner','6789','ACCT_fixture','verified')",
     )
     .run(user.id);
   return { DB, env, user, cookie };
@@ -949,7 +955,7 @@ test("queue checks opt-out again at send time and does not call a provider for s
     )
     .run(user.id);
   DB.sqlite.exec(
-    "INSERT INTO announcement_recipients(announcement_id,guest_id) VALUES('a','g')",
+    "UPDATE event_entitlements SET message_limit=100;INSERT INTO announcement_recipients(announcement_id,guest_id) VALUES('a','g')",
   );
   let sends = 0,
     acks = 0;
@@ -1525,4 +1531,943 @@ test("MFA attempt limits apply per account across newly issued challenges", asyn
     10,
   );
   DB.sqlite.close();
+});
+
+const ownerPassword = "Strong-Owner-2026!";
+const providerResponse = (data) =>
+  new Response(JSON.stringify({ status: true, data }), { status: 200 });
+async function commerceFixture() {
+  const f = await ownerFixture();
+  f.env.PAYSTACK_SECRET_KEY = "test-only-commerce";
+  f.env.PAYOUT_VERIFICATION_KEY =
+    "test-only-payout-key-with-at-least-32-characters";
+  return f;
+}
+async function checkoutPackage(
+  f,
+  product = "essential",
+  key = "stable-package-order-key-123",
+  price = 750000,
+) {
+  return http(f.env, "/events/e/billing/checkout", {
+    method: "POST",
+    cookie: f.cookie,
+    headers: { "Idempotency-Key": key },
+    body: { product, expectedPriceMinor: price },
+  });
+}
+async function billingWebhook(f, order, overrides = {}) {
+  const { createHmac } = await import("node:crypto");
+  const body = JSON.stringify({
+    event: "charge.success",
+    data: {
+      id: 123,
+      reference: order.reference,
+      status: "success",
+      amount: order.amount_minor,
+      currency: "NGN",
+      ...overrides,
+    },
+  });
+  return worker.fetch(
+    new Request("http://localhost/api/v1/webhooks/paystack", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-paystack-signature": createHmac("sha512", f.env.PAYSTACK_SECRET_KEY)
+          .update(body)
+          .digest("hex"),
+      },
+      body,
+    }),
+    f.env,
+    { waitUntil() {} },
+  );
+}
+test("catalog defaults to a usable free tier; paid drafts cannot be purchased and ownership is enforced", async () => {
+  const f = await commerceFixture();
+  const catalog = await (await call(f.env, "/plans")).json();
+  assert.equal(catalog.plans.filter((p) => p.active).length, 1);
+  assert.equal(catalog.plans.find((p) => p.active).code, "free");
+  const bill = await (
+    await call(f.env, "/events/e/billing", undefined, f.cookie)
+  ).json();
+  assert.equal(bill.entitlement.guest_limit, 50);
+  assert.equal(bill.entitlement.message_limit, 0);
+  assert.equal((await checkoutPackage(f)).status, 409);
+  assert.equal((await call(f.env, "/events/e/billing")).status, 401);
+  assert.equal(
+    (await call(f.env, "/admin/commerce", undefined, f.cookie)).status,
+    403,
+  );
+  assert.equal(
+    (await call(f.env, "/events/another/billing", undefined, f.cookie)).status,
+    404,
+  );
+  f.DB.sqlite.close();
+});
+test("free quotas enforce party places, bulk rollback, occasions, media and lifetime message credits", async () => {
+  const { DB } = await ownerFixture();
+  const sql = DB.sqlite;
+  sql.exec(
+    "INSERT INTO guests(id,event_id,name,party_size) VALUES('g','e','Large party',20),('g2','e','Second party',30)",
+  );
+  assert.throws(
+    () =>
+      sql.exec(
+        "INSERT INTO guests(id,event_id,name) VALUES('over','e','One more')",
+      ),
+    /package_limit/,
+  );
+  assert.throws(
+    () => sql.exec("UPDATE guests SET party_size=21 WHERE id='g'"),
+    /package_limit/,
+  );
+  assert.equal(
+    sql.prepare("SELECT party_size FROM guests WHERE id='g'").get().party_size,
+    20,
+  );
+  sql.exec(
+    "UPDATE event_entitlements SET occasion_limit=1,photo_limit=1,storage_limit=10;INSERT INTO occasions(id,event_id,title,starts_at,venue_name,address) VALUES('o','e','Day','2027-01-01','Lagos','Lagos')",
+  );
+  assert.throws(
+    () =>
+      sql.exec(
+        "INSERT INTO occasions(id,event_id,title,starts_at,venue_name,address) VALUES('o2','e','Day two','2027-01-02','Lagos','Lagos')",
+      ),
+    /package_limit/,
+  );
+  sql.exec(
+    "INSERT INTO media(id,event_id,object_key,mime_type,size_bytes) VALUES('m','e','photo','image/png',10)",
+  );
+  assert.throws(
+    () =>
+      sql.exec(
+        "INSERT INTO media(id,event_id,object_key,mime_type,size_bytes) VALUES('m2','e','photo2','image/png',1)",
+      ),
+    /package_limit/,
+  );
+  const owner = sql
+    .prepare("SELECT owner_id FROM events WHERE id='e'")
+    .get().owner_id;
+  sql
+    .prepare(
+      "INSERT INTO announcements(id,event_id,created_by,channel,audience,message) VALUES('a','e',?,'email','all','Hi')",
+    )
+    .run(owner);
+  assert.throws(
+    () =>
+      sql.exec(
+        "INSERT INTO announcement_recipients(announcement_id,guest_id) VALUES('a','g')",
+      ),
+    /package_limit/,
+  );
+  sql.exec(
+    "UPDATE event_entitlements SET message_limit=1;INSERT INTO announcement_recipients(announcement_id,guest_id) VALUES('a','g');DELETE FROM announcement_recipients WHERE announcement_id='a'",
+  );
+  assert.equal(
+    sql
+      .prepare(
+        "SELECT messages_used FROM event_entitlements WHERE event_id='e'",
+      )
+      .get().messages_used,
+    1,
+  );
+  assert.throws(
+    () =>
+      sql.exec(
+        "INSERT INTO announcement_recipients(announcement_id,guest_id) VALUES('a','g')",
+      ),
+    /package_limit/,
+  );
+  sql.close();
+});
+test("package checkout binds price and key, reuses one provider initialization, and grants only verified unsplit payments once", async () => {
+  const f = await commerceFixture(),
+    original = globalThis.fetch;
+  let calls = 0;
+  f.DB.sqlite.exec("UPDATE plan_catalog SET active=1 WHERE code='essential'");
+  globalThis.fetch = async (url, init) => {
+    calls++;
+    const body = JSON.parse(init.body);
+    assert.equal(body.amount, 750000);
+    assert.equal(body.subaccount, undefined);
+    return providerResponse({
+      authorization_url: "https://checkout.paystack.com/test-package",
+    });
+  };
+  try {
+    assert.equal(
+      (await checkoutPackage(f, "essential", "stable-package-order-key-123", 1))
+        .status,
+      409,
+    );
+    assert.equal((await checkoutPackage(f)).status, 201);
+    assert.equal((await checkoutPackage(f)).status, 200);
+    assert.equal(calls, 1);
+    assert.equal((await checkoutPackage(f, "guest-pack")).status, 409);
+    const order = f.DB.sqlite.prepare("SELECT * FROM billing_orders").get();
+    assert.equal(
+      f.DB.sqlite
+        .prepare("SELECT tier FROM event_entitlements WHERE event_id='e'")
+        .get().tier,
+      0,
+    );
+    assert.equal((await billingWebhook(f, order, { amount: 1 })).status, 422);
+    assert.equal(
+      (await billingWebhook(f, order, { currency: "USD" })).status,
+      422,
+    );
+    assert.equal(
+      (
+        await billingWebhook(f, order, {
+          subaccount: { subaccount_code: "ACCT_attacker" },
+        })
+      ).status,
+      422,
+    );
+    assert.equal((await billingWebhook(f, order)).status, 200);
+    assert.equal((await billingWebhook(f, order)).status, 200);
+    const q = f.DB.sqlite
+      .prepare("SELECT * FROM event_entitlements WHERE event_id='e'")
+      .get();
+    assert.equal(q.guest_limit, 200);
+    assert.equal(q.plan_code, "essential");
+    assert.throws(
+      () => f.DB.sqlite.exec("UPDATE billing_orders SET status='uncertain'"),
+      /paid_order_immutable/,
+    );
+    assert.equal((await checkoutPackage(f)).status, 200);
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = original;
+    f.DB.sqlite.close();
+  }
+});
+test("add-on credits survive later upgrades and webhook replays cannot grant them twice", async () => {
+  const f = await commerceFixture();
+  const add = (ref, code) =>
+    f.DB.sqlite
+      .prepare(
+        "INSERT INTO billing_orders(reference,event_id,owner_id,request_key,product_code,kind,tier,amount_minor,limits_json) SELECT ?,'e',?,?,code,kind,tier,price_minor,limits_json FROM plan_catalog WHERE code=?",
+      )
+      .run(ref, f.user.id, ref, code);
+  add("pack", "guest-pack");
+  let order = f.DB.sqlite
+    .prepare("SELECT * FROM billing_orders WHERE reference='pack'")
+    .get();
+  assert.equal((await billingWebhook(f, order)).status, 200);
+  assert.equal((await billingWebhook(f, order)).status, 200);
+  assert.equal(
+    f.DB.sqlite
+      .prepare("SELECT guest_limit FROM event_entitlements WHERE event_id='e'")
+      .get().guest_limit,
+    150,
+  );
+  add("upgrade", "celebration");
+  order = f.DB.sqlite
+    .prepare("SELECT * FROM billing_orders WHERE reference='upgrade'")
+    .get();
+  assert.equal((await billingWebhook(f, order)).status, 200);
+  assert.equal(
+    f.DB.sqlite
+      .prepare("SELECT guest_limit FROM event_entitlements WHERE event_id='e'")
+      .get().guest_limit,
+    600,
+  );
+  f.DB.sqlite.exec("UPDATE events SET lifecycle='archived' WHERE id='e'");
+  assert.equal(
+    (
+      await call(
+        f.env,
+        "/events/e/delete",
+        { password: ownerPassword, confirmation: "Test event" },
+        f.cookie,
+      )
+    ).status,
+    409,
+  );
+  f.DB.sqlite.close();
+});
+test("ambiguous package initialization retains its reference; cron verifies without issuing replacement charges", async () => {
+  const f = await commerceFixture(),
+    original = globalThis.fetch;
+  let initialized = 0;
+  f.DB.sqlite.exec("UPDATE plan_catalog SET active=1 WHERE code<>'free'");
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith("/initialize")) {
+      initialized++;
+      throw Error("timeout");
+    }
+    const order = f.DB.sqlite.prepare("SELECT * FROM billing_orders").get();
+    return providerResponse({
+      reference: order.reference,
+      status: "success",
+      amount: order.amount_minor,
+      currency: "NGN",
+      subaccount: {},
+      split: {},
+    });
+  };
+  try {
+    assert.equal((await checkoutPackage(f)).status, 202);
+    assert.equal((await checkoutPackage(f)).status, 202);
+    assert.equal(
+      (
+        await checkoutPackage(
+          f,
+          "guest-pack",
+          "another-stable-package-key",
+          250000,
+        )
+      ).status,
+      409,
+    );
+    assert.equal(initialized, 1);
+    await worker.scheduled({}, f.env);
+    assert.equal(
+      f.DB.sqlite.prepare("SELECT status FROM billing_orders").get().status,
+      "paid",
+    );
+    assert.equal(initialized, 1);
+  } finally {
+    globalThis.fetch = original;
+    f.DB.sqlite.close();
+  }
+});
+test("operator closure requires step-up and explicit provider review; late payments are still honored once", async () => {
+  const f = await commerceFixture();
+  f.DB.sqlite
+    .prepare("UPDATE users SET platform_role='admin' WHERE id=?")
+    .run(f.user.id);
+  f.DB.sqlite
+    .prepare(
+      "INSERT INTO billing_orders(reference,event_id,owner_id,request_key,product_code,kind,tier,amount_minor,limits_json,status) SELECT 'close-ref','e',?,'close-key',code,kind,tier,price_minor,limits_json,'uncertain' FROM plan_catalog WHERE code='guest-pack'",
+    )
+    .run(f.user.id);
+  const body = {
+    password: ownerPassword,
+    reason: "Provider support confirmed cancellation",
+    confirmation: "Provider checkout cancelled; no payment received",
+  };
+  assert.equal(
+    (
+      await call(
+        f.env,
+        "/admin/billing/close-ref/close",
+        { ...body, password: "wrong" },
+        f.cookie,
+      )
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await call(
+        f.env,
+        "/admin/billing/close-ref/close",
+        { ...body, confirmation: "retry" },
+        f.cookie,
+      )
+    ).status,
+    422,
+  );
+  assert.equal(
+    (await call(f.env, "/admin/billing/close-ref/close", body, f.cookie))
+      .status,
+    200,
+  );
+  const order = f.DB.sqlite.prepare("SELECT * FROM billing_orders").get();
+  assert.equal(order.status, "rejected");
+  assert.equal((await billingWebhook(f, order)).status, 200);
+  assert.equal((await billingWebhook(f, order)).status, 200);
+  assert.equal(
+    f.DB.sqlite
+      .prepare("SELECT guest_limit FROM event_entitlements WHERE event_id='e'")
+      .get().guest_limit,
+    150,
+  );
+  assert.equal(
+    (await call(f.env, "/admin/billing/close-ref/close", body, f.cookie))
+      .status,
+    409,
+  );
+  f.DB.sqlite.close();
+});
+test("payout onboarding stores no full account number, cannot duplicate creation, and needs provider and human review", async () => {
+  const f = await commerceFixture(),
+    original = globalThis.fetch;
+  f.DB.sqlite.exec("DELETE FROM payout_accounts");
+  let created = 0;
+  const provider = {
+    subaccount_code: "ACCT_onboarding",
+    settlement_bank: "Test Bank",
+    bank_code: "058",
+    account_number: "0123456789",
+    active: true,
+    is_verified: true,
+    metadata: { invibox_owner_id: f.user.id },
+  };
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes("/bank?"))
+      return providerResponse([{ code: "058", name: "Test Bank" }]);
+    if (String(url).includes("/bank/resolve"))
+      return providerResponse({
+        account_number: "0123456789",
+        account_name: "Account Owner",
+      });
+    if (String(url).endsWith("/subaccount")) {
+      created++;
+      provider.metadata = JSON.parse(JSON.parse(init.body).metadata);
+      assert.equal(JSON.parse(init.body).percentage_charge, 0);
+      return providerResponse(provider);
+    }
+    return providerResponse(provider);
+  };
+  try {
+    const body = {
+      password: ownerPassword,
+      bankCode: "058",
+      accountNumber: "0123456789",
+      businessName: "My events",
+      consent: true,
+    };
+    assert.equal(
+      (await call(f.env, "/account/payout", body, f.cookie)).status,
+      202,
+    );
+    assert.equal(
+      (await call(f.env, "/account/payout", body, f.cookie)).status,
+      409,
+    );
+    assert.equal(created, 1);
+    const stored = f.DB.sqlite.prepare("SELECT * FROM payout_accounts").get();
+    assert.equal(stored.state, "review");
+    assert.ok(!JSON.stringify(stored).includes("0123456789"));
+    assert.ok(
+      !(
+        await (await call(f.env, "/account/payout", undefined, f.cookie)).text()
+      ).includes(stored.request_hash),
+    );
+    const approve = {
+      password: ownerPassword,
+      subaccountCode: "ACCT_onboarding",
+      identityReviewed: true,
+      reason: "Identity and bank authority reviewed independently",
+    };
+    assert.equal(
+      (
+        await call(
+          f.env,
+          `/admin/payouts/${f.user.id}/verify`,
+          approve,
+          f.cookie,
+        )
+      ).status,
+      403,
+    );
+    f.DB.sqlite
+      .prepare("UPDATE users SET platform_role='admin' WHERE id=?")
+      .run(f.user.id);
+    provider.is_verified = false;
+    assert.equal(
+      (
+        await call(
+          f.env,
+          `/admin/payouts/${f.user.id}/verify`,
+          approve,
+          f.cookie,
+        )
+      ).status,
+      409,
+    );
+    provider.is_verified = true;
+    provider.settlement_bank = "Wrong bank";
+    assert.equal(
+      (
+        await call(
+          f.env,
+          `/admin/payouts/${f.user.id}/verify`,
+          approve,
+          f.cookie,
+        )
+      ).status,
+      409,
+    );
+    provider.settlement_bank = "Test Bank";
+    provider.metadata.invibox_owner_id = "wrong";
+    assert.equal(
+      (
+        await call(
+          f.env,
+          `/admin/payouts/${f.user.id}/verify`,
+          approve,
+          f.cookie,
+        )
+      ).status,
+      409,
+    );
+    provider.metadata.invibox_owner_id = f.user.id;
+    assert.equal(
+      (
+        await call(
+          f.env,
+          `/admin/payouts/${f.user.id}/verify`,
+          approve,
+          f.cookie,
+        )
+      ).status,
+      200,
+    );
+    assert.equal(
+      f.DB.sqlite.prepare("SELECT state FROM payout_accounts").get().state,
+      "verified",
+    );
+    const block = {
+      password: ownerPassword,
+      reason: "Bank replacement requested by organizer",
+    };
+    assert.equal(
+      (await call(f.env, `/admin/payouts/${f.user.id}/block`, block, f.cookie))
+        .status,
+      200,
+    );
+    const reset = {
+      ...block,
+      confirmation: "Provider absent or inactive; settlements reviewed",
+    };
+    assert.equal(
+      (await call(f.env, `/admin/payouts/${f.user.id}/reset`, reset, f.cookie))
+        .status,
+      409,
+    );
+    provider.active = false;
+    assert.equal(
+      (await call(f.env, `/admin/payouts/${f.user.id}/reset`, reset, f.cookie))
+        .status,
+      200,
+    );
+    assert.equal(
+      f.DB.sqlite.prepare("SELECT COUNT(*) AS n FROM payout_accounts").get().n,
+      0,
+    );
+    assert.ok(
+      f.DB.sqlite
+        .prepare(
+          "SELECT COUNT(*) AS n FROM audit_logs WHERE action='payout.reset'",
+        )
+        .get().n,
+    );
+  } finally {
+    globalThis.fetch = original;
+    f.DB.sqlite.close();
+  }
+});
+test("payout creation timeout remains uncertain and missing fingerprint secret fails closed", async () => {
+  const f = await commerceFixture(),
+    original = globalThis.fetch;
+  f.DB.sqlite.exec("DELETE FROM payout_accounts");
+  const body = {
+    password: ownerPassword,
+    bankCode: "058",
+    accountNumber: "0123456789",
+    businessName: "My events",
+    consent: true,
+  };
+  const key = f.env.PAYOUT_VERIFICATION_KEY;
+  delete f.env.PAYOUT_VERIFICATION_KEY;
+  assert.equal(
+    (await call(f.env, "/account/payout", body, f.cookie)).status,
+    503,
+  );
+  f.env.PAYOUT_VERIFICATION_KEY = key;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("/bank?"))
+      return providerResponse([{ code: "058", name: "Test Bank" }]);
+    if (String(url).includes("/resolve"))
+      return providerResponse({
+        account_number: "0123456789",
+        account_name: "Owner",
+      });
+    throw Error("timeout");
+  };
+  try {
+    assert.equal(
+      (await call(f.env, "/account/payout", body, f.cookie)).status,
+      202,
+    );
+    assert.equal(
+      f.DB.sqlite.prepare("SELECT state FROM payout_accounts").get().state,
+      "uncertain",
+    );
+    assert.equal(
+      (await call(f.env, "/account/payout", body, f.cookie)).status,
+      409,
+    );
+  } finally {
+    globalThis.fetch = original;
+    f.DB.sqlite.close();
+  }
+});
+test("contributions fail closed without verified payout and snapshot the zero-commission organizer route", async () => {
+  const f = await commerceFixture(),
+    original = globalThis.fetch;
+  let payload;
+  const donate = () =>
+    http(f.env, "/public/payments/paystack/initialize", {
+      method: "POST",
+      headers: { "Idempotency-Key": "stable-routed-contribution-123" },
+      body: {
+        slug: "test-event",
+        email: "guest@example.com",
+        amount: 1000,
+        purpose: "gift",
+      },
+    });
+  globalThis.fetch = async (url, init) => {
+    payload = JSON.parse(init.body);
+    return providerResponse({
+      authorization_url: "https://checkout.paystack.com/routed",
+      access_code: "access",
+    });
+  };
+  try {
+    f.DB.sqlite.exec("UPDATE payout_accounts SET state='review'");
+    assert.equal((await donate()).status, 409);
+    f.DB.sqlite.exec("UPDATE payout_accounts SET state='verified'");
+    assert.equal((await donate()).status, 201);
+    assert.equal(payload.subaccount, "ACCT_fixture");
+    assert.equal(payload.transaction_charge, 0);
+    assert.equal(payload.bearer, "subaccount");
+    const payment = f.DB.sqlite.prepare("SELECT * FROM payments").get();
+    assert.equal(payment.subaccount_code, "ACCT_fixture");
+    assert.throws(
+      () =>
+        f.DB.sqlite.exec("UPDATE payments SET subaccount_code='ACCT_other'"),
+      /payment_route_immutable/,
+    );
+    assert.equal(
+      (
+        await billingWebhook(f, payment, {
+          subaccount: { subaccount_code: "ACCT_wrong" },
+        })
+      ).status,
+      422,
+    );
+    assert.equal(
+      (
+        await billingWebhook(f, payment, {
+          subaccount: { subaccount_code: "ACCT_fixture" },
+        })
+      ).status,
+      200,
+    );
+  } finally {
+    globalThis.fetch = original;
+    f.DB.sqlite.close();
+  }
+});
+test("catalog updates validate prices and preserve previously snapshotted limits", async () => {
+  const f = await commerceFixture();
+  f.DB.sqlite
+    .prepare("UPDATE users SET platform_role='admin' WHERE id=?")
+    .run(f.user.id);
+  const free = f.DB.sqlite
+    .prepare("SELECT * FROM plan_catalog WHERE code='free'")
+    .get();
+  const body = {
+    password: ownerPassword,
+    name: "Free",
+    priceMinor: 0,
+    active: true,
+    limits: { ...JSON.parse(free.limits_json), guests: 75 },
+  };
+  const update = (body, code = "free") =>
+    http(f.env, `/admin/plans/${code}`, {
+      method: "PATCH",
+      cookie: f.cookie,
+      body,
+    });
+  assert.equal((await update({ ...body, priceMinor: 10000 })).status, 422);
+  assert.equal((await update({ ...body, active: false })).status, 422);
+  assert.equal((await update(body, "nonexistent")).status, 404);
+  assert.equal((await update(body)).status, 200);
+  assert.equal(
+    f.DB.sqlite
+      .prepare("SELECT guest_limit FROM event_entitlements WHERE event_id='e'")
+      .get().guest_limit,
+    50,
+  );
+  f.DB.sqlite
+    .prepare(
+      "INSERT INTO events(id,owner_id,slug,title,event_type,starts_at,location) VALUES('new',?,'new-package','New','custom','2027-01-01','Lagos')",
+    )
+    .run(f.user.id);
+  assert.equal(
+    f.DB.sqlite
+      .prepare(
+        "SELECT guest_limit FROM event_entitlements WHERE event_id='new'",
+      )
+      .get().guest_limit,
+    75,
+  );
+  f.DB.sqlite.close();
+});
+test("financial operations enforce enabled MFA and consume recovery proof atomically", async () => {
+  const f = await enrolledOwner();
+  f.DB.sqlite
+    .prepare("UPDATE users SET platform_role='admin' WHERE id=?")
+    .run(f.user.id);
+  const login = await call(f.env, "/auth/mfa", {
+    challengeToken: await challenge(f.env),
+    code: f.codes[0],
+  });
+  assert.equal(login.status, 200);
+  const cookie = login.headers.get("set-cookie").split(";")[0];
+  const body = {
+    password: ownerPassword,
+    reason: "Bank account review found a discrepancy",
+  };
+  assert.equal(
+    (await call(f.env, `/admin/payouts/${f.user.id}/block`, body, cookie))
+      .status,
+    401,
+  );
+  assert.equal(
+    (
+      await call(
+        f.env,
+        `/admin/payouts/${f.user.id}/block`,
+        { ...body, code: f.codes[1] },
+        cookie,
+      )
+    ).status,
+    200,
+  );
+  assert.equal(
+    (
+      await call(
+        f.env,
+        `/admin/payouts/${f.user.id}/block`,
+        { ...body, code: f.codes[1] },
+        cookie,
+      )
+    ).status,
+    409,
+  );
+  f.DB.sqlite.close();
+});
+
+test("bulk guest quota validation runs at commit and rolls back the whole snapshot", async () => {
+  const { DB } = await ownerFixture();
+  DB.sqlite.exec(
+    "UPDATE event_entitlements SET guest_limit=1;INSERT INTO guests(id,event_id,name) VALUES('before','e','Before')",
+  );
+  const version = DB.sqlite
+    .prepare("SELECT guests_version FROM events WHERE id='e'")
+    .get().guests_version;
+  const guard = () =>
+    DB.prepare(
+      "INSERT INTO sync_guards(id,event_id,collection,expected_version) VALUES('quota-sync','e','guests',?)",
+    ).bind(version);
+  await assert.rejects(
+    DB.batch([
+      guard(),
+      DB.prepare(
+        "INSERT INTO guests(id,event_id,name) VALUES('extra','e','Extra')",
+      ),
+      DB.prepare("DELETE FROM sync_guards WHERE id='quota-sync'"),
+    ]),
+    /package_limit/,
+  );
+  assert.equal(
+    DB.sqlite
+      .prepare("SELECT COUNT(*) AS n FROM guests WHERE event_id='e'")
+      .get().n,
+    1,
+  );
+  assert.equal(
+    DB.sqlite.prepare("SELECT COUNT(*) AS n FROM sync_guards").get().n,
+    0,
+  );
+  await DB.batch([
+    guard(),
+    DB.prepare(
+      "INSERT INTO guests(id,event_id,name) VALUES('after','e','After')",
+    ),
+    DB.prepare("DELETE FROM guests WHERE id='before'"),
+    DB.prepare("DELETE FROM sync_guards WHERE id='quota-sync'"),
+  ]);
+  assert.equal(
+    DB.sqlite.prepare("SELECT id FROM guests WHERE event_id='e'").get().id,
+    "after",
+  );
+  DB.sqlite.close();
+});
+test("simultaneous package retries claim one initialization; webhook wins over a late checkout response", async () => {
+  const f = await commerceFixture(),
+    original = globalThis.fetch;
+  f.DB.sqlite.exec("UPDATE plan_catalog SET active=1 WHERE code='essential'");
+  let entered,
+    release,
+    requests = 0;
+  const started = new Promise((resolve) => (entered = resolve)),
+    hold = new Promise((resolve) => (release = resolve));
+  globalThis.fetch = async () => {
+    requests++;
+    entered();
+    await hold;
+    return providerResponse({
+      authorization_url: "https://checkout.paystack.com/race",
+    });
+  };
+  try {
+    const first = checkoutPackage(f);
+    await started;
+    assert.equal((await checkoutPackage(f)).status, 202);
+    assert.equal(
+      (await checkoutPackage(f, "essential", "different-stable-package-key"))
+        .status,
+      409,
+    );
+    const order = f.DB.sqlite.prepare("SELECT * FROM billing_orders").get();
+    assert.equal((await billingWebhook(f, order)).status, 200);
+    release();
+    const result = await (await first).json();
+    assert.equal(result.status, "paid");
+    assert.equal(result.checkoutUrl, undefined);
+    assert.equal(requests, 1);
+    assert.equal(
+      f.DB.sqlite
+        .prepare(
+          "SELECT guest_limit FROM event_entitlements WHERE event_id='e'",
+        )
+        .get().guest_limit,
+      200,
+    );
+  } finally {
+    release();
+    globalThis.fetch = original;
+    f.DB.sqlite.close();
+  }
+});
+
+test("stale payout approval cannot reverse a concurrent block or attach an earlier onboarding request", async () => {
+  const f = await commerceFixture(),
+    original = globalThis.fetch;
+  const { createHmac } = await import("node:crypto");
+  f.DB.sqlite
+    .prepare("UPDATE users SET platform_role='admin' WHERE id=?")
+    .run(f.user.id);
+  f.DB.sqlite
+    .prepare("UPDATE payout_accounts SET state='review',request_hash=?")
+    .run(
+      createHmac("sha512", f.env.PAYOUT_VERIFICATION_KEY)
+        .update("058:0123456789")
+        .digest("hex"),
+    );
+  const account = f.DB.sqlite.prepare("SELECT * FROM payout_accounts").get();
+  const provider = {
+    subaccount_code: "ACCT_fixture",
+    settlement_bank: "Test Bank",
+    account_number: "0123456789",
+    active: true,
+    is_verified: true,
+    metadata: {
+      invibox_owner_id: f.user.id,
+      invibox_request_id: "previous-request",
+    },
+  };
+  globalThis.fetch = async () => providerResponse(provider);
+  const body = {
+    password: ownerPassword,
+    identityReviewed: true,
+    subaccountCode: "ACCT_fixture",
+    reason: "Independent identity review completed",
+  };
+  try {
+    assert.equal(
+      (await call(f.env, `/admin/payouts/${f.user.id}/verify`, body, f.cookie))
+        .status,
+      409,
+    );
+    provider.metadata.invibox_request_id = account.request_id;
+    globalThis.fetch = async () => {
+      f.DB.sqlite.exec("UPDATE payout_accounts SET state='blocked'");
+      return providerResponse(provider);
+    };
+    assert.equal(
+      (await call(f.env, `/admin/payouts/${f.user.id}/verify`, body, f.cookie))
+        .status,
+      409,
+    );
+    assert.equal(
+      f.DB.sqlite.prepare("SELECT state FROM payout_accounts").get().state,
+      "blocked",
+    );
+    assert.equal(
+      f.DB.sqlite
+        .prepare("SELECT COUNT(*) AS n FROM payout_review_guards")
+        .get().n,
+      0,
+    );
+    assert.equal(
+      f.DB.sqlite
+        .prepare(
+          "SELECT COUNT(*) AS n FROM audit_logs WHERE action='payout.verify'",
+        )
+        .get().n,
+      0,
+    );
+  } finally {
+    globalThis.fetch = original;
+    f.DB.sqlite.close();
+  }
+});
+test("legacy merchant-only payment reservations cannot initialize or reopen checkout after organizer routing is required", async () => {
+  const f = await commerceFixture(),
+    original = globalThis.fetch;
+  let requests = 0;
+  const body = {
+      slug: "test-event",
+      email: "guest@example.com",
+      amount: 100,
+      purpose: "contribution",
+    },
+    key = "legacy-payment-stable-key";
+  const hash = await sha(
+    JSON.stringify({
+      eventId: "e",
+      guestId: null,
+      email: body.email,
+      amountMinor: 10000,
+      purpose: body.purpose,
+    }),
+  );
+  f.DB.sqlite
+    .prepare(
+      "INSERT INTO payments(id,event_id,provider,reference,purpose,amount_minor,request_key,request_hash,initialization_state,status) VALUES('legacy','e','paystack','legacy-ref','contribution',10000,?,?,'reserved','pending')",
+    )
+    .run(key, hash);
+  globalThis.fetch = async () => {
+    requests++;
+    throw Error("must not initialize merchant fallback");
+  };
+  const initialize = () =>
+    http(f.env, "/public/payments/paystack/initialize", {
+      method: "POST",
+      headers: { "Idempotency-Key": key },
+      body,
+    });
+  try {
+    assert.equal((await initialize()).status, 409);
+    f.DB.sqlite.exec(
+      "UPDATE payments SET checkout_url='https://checkout.paystack.com/legacy'",
+    );
+    assert.equal((await initialize()).status, 409);
+    assert.equal(requests, 0);
+  } finally {
+    globalThis.fetch = original;
+    f.DB.sqlite.close();
+  }
 });

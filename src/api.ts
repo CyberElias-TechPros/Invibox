@@ -8,7 +8,7 @@ export class ApiError extends Error {
     super(message);
   }
 }
-async function request<T>(path: string, init: RequestInit = {}) {
+export async function request<T>(path: string, init: RequestInit = {}) {
   const res = await fetch(`${BASE}${path}`, {
     signal: AbortSignal.timeout(20000),
     credentials: "include",

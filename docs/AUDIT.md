@@ -7,3 +7,8 @@ These defects were addressed in the current branch. The detailed before/after ma
 This audit is a code review plus local test execution, not an independent penetration test or blanket production sign-off. Existing historical production data, if any, requires inspection before new integrity triggers are applied. External providers and deployed infrastructure were not exercised with live credentials.
 
 On 27 September 2026, the follow-up added encrypted authenticator MFA and recovery, guest-photo submission/moderation/withdrawal, durable upload reservation cleanup, consent history and audit review, and unsaved-editor navigation guards. Local tests include RFC TOTP vectors, concurrent proof consumption, account-wide attempt bounds, password-reset/MFA interaction, photo access and storage failure cases, and browser-level workflows. This remains an implementation review rather than an independent security certification.
+
+
+## Commerce follow-up — 27 September 2026
+
+Implemented and tested configurable event packages/packs and quota triggers; exactly-once package fulfillment; quoted-price/idempotency binding; owner/operator/cron recovery; mask-only payout onboarding with keyed fingerprints; provider bank/owner/request matching; atomic password/MFA-protected review; stale-review guards; local block/replacement workflows; immutable organizer routing and rejection of merchant-only checkout reuse. Public prices are explicitly proposed and inactive by default. Validation now includes 42 SQLite Worker tests and 12 browser stories, in addition to 47 unit tests and 65 API regression checks. Provider, KYC, settlement, legal, refund/dispute, tax, scale and independent security acceptance remain open, as detailed in COMMERCE and READINESS.

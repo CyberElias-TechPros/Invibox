@@ -1,3 +1,9 @@
+import {
+  registerCommerceRoutes,
+  reconcileBilling,
+  settleBilling,
+  contributionMatches,
+} from "./commerce";
 import { registerGuestMediaRoutes, cleanAbandonedUploads } from "./guestMedia";
 import { loginChallenge, registerMfaRoutes } from "./mfa";
 import { registerCommunicationRoutes, withUnsubscribe } from "./communications";
@@ -13,7 +19,6 @@ import {
   zonedDateTime,
   localDateTime,
   constantTimeEqual,
-  paymentMatches,
 } from "./domain";
 import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
@@ -410,6 +415,7 @@ app.get("/api/v1/auth/me", authenticate, async (c) => {
 registerAccountRoutes(app, authenticate, rateLimit);
 registerMfaRoutes(app, authenticate, rateLimit);
 registerGuestMediaRoutes(app, rateLimit);
+registerCommerceRoutes(app, authenticate, rateLimit);
 registerPrivacyRoutes(app, authenticate, rateLimit);
 registerCommunicationRoutes(app, rateLimit);
 
@@ -2131,13 +2137,14 @@ app.post("/api/v1/webhooks/paystack", async (c) => {
   const data = payload.data;
   if (!data || typeof data.reference !== "string" || !data.id)
     throw new HTTPException(422, { message: "Invalid payment payload" });
+  if (await settleBilling(c.env, data)) return c.json({ ok: true });
   const payment = await c.env.DB.prepare(
-    "SELECT reference,amount_minor,currency FROM payments WHERE reference=?",
+    "SELECT reference,amount_minor,currency,subaccount_code FROM payments WHERE reference=?",
   )
     .bind(data.reference)
     .first<any>();
   if (!payment) return c.json({ ok: true, ignored: true }); // Merchant may serve other applications.
-  if (!paymentMatches(payment, data))
+  if (!contributionMatches(payment, data))
     throw new HTTPException(422, {
       message: "Payment amount, currency or status does not match",
     });
@@ -2210,6 +2217,15 @@ app.onError((err, c) => {
       400,
     );
   const conflicts: Record<string, string> = {
+    payout_review_changed:
+      "This payout request changed during review. Reload it before approving or replacing the bank account.",
+    billing_event_closed: "This event is closed to package purchases.",
+    payout_not_verified:
+      "Organizer payout approval changed. Please contact the organizer.",
+    package_limit:
+      "This event’s package allowance has been reached. Organizers can upgrade under Settings → Packages & usage.",
+    "UNIQUE constraint failed: billing_orders.event_id":
+      "An existing package order needs reconciliation before another purchase.",
     guest_media_quota:
       "Guest photo allowance reached (20 photos / 100 MB per guest, 2,000 items / 2 GB per event). Withdraw old photos or contact the organizer.",
     guest_uploads_closed: "Guest uploads are closed for this event.",
@@ -2469,6 +2485,7 @@ export default {
           }),
         );
     if (env.PAYSTACK_SECRET_KEY) {
+      await reconcileBilling(env);
       const pending = await env.DB.prepare(
         "SELECT reference FROM payments WHERE status IN ('pending','initialized') AND created_at>datetime('now','-7 days') AND (last_verified_at IS NULL OR julianday(last_verified_at)<julianday('now','-30 minutes')) ORDER BY COALESCE(last_verified_at,created_at) LIMIT 5",
       ).all<{ reference: string }>();

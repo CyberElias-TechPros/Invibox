@@ -1,3 +1,4 @@
+import CommerceAdmin, { BillingPanel, BillingReturn } from "./Commerce";
 import AuditPanel, { GuestMediaSettings } from "./AuditPanel";
 import { confirmNavigation } from "./unsaved";
 
@@ -3044,6 +3045,7 @@ function SettingsPage({ notify }: { notify: (s: string) => void }) {
           <TeamPanel eventId={eventId} notify={notify} />
         </section>
       </div>
+      {event?.member_role === "owner" && <BillingPanel eventId={eventId} />}
       <PaymentsPanel eventId={eventId} />
       <AuditPanel eventId={eventId} />
       <GuestMediaSettings
@@ -3645,6 +3647,9 @@ function AccessPortal() {
         </main>
       </div>
     );
+  if (location.pathname === "/app/commerce") return <CommerceAdmin />;
+  if (new URLSearchParams(location.search).has("billingEvent"))
+    return <BillingReturn />;
   if (location.pathname === "/app/account") return <AccountPage />;
   if (phase === "onboarding") return <FirstEvent onCreate={createFirst} />;
   return <AppShell />;

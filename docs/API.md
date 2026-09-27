@@ -112,3 +112,27 @@ Each TOTP counter and recovery code is single-use. Wait for the next 30-second c
 - `DELETE /public/events/:slug/media/:mediaId`: withdraw own submissions only, even after archival; queues referenced R2 deletion. Does not erase copies already downloaded.
 - Existing organizer moderation accepts `{status,shareWithGuests?}`. Legacy organizer approvals are not automatically guest-visible; photos must also be explicitly marked shareable and the gallery enabled. Completion/archival does not block moderation maintenance.
 - `GET /events/:id/consents`: owner/admin only, latest 100 preference changes. Each change records guest/event, three channel flags, source, policy version and timestamp. Full retained history is part of password-confirmed owner exports; guest erasure cascades history deletion.
+
+
+## Packages and organizer payouts (migration 0013)
+
+All paths below have prefix `/api/v1`. See [COMMERCE.md](COMMERCE.md) for state machines and recovery requirements.
+
+| Method/path | Access / payload |
+| --- | --- |
+| `GET /plans` | Public catalog; inactive entries are drafts/not purchasable |
+| `GET /events/:eventId/billing` | Owner only; entitlement, usage, latest 50 orders |
+| `POST /events/:eventId/billing/checkout` | Owner, verified email outside development; `Idempotency-Key`, `{product, expectedPriceMinor}`; 201 checkout, 200 replay/paid, 202 uncertain |
+| `POST /events/:eventId/billing/:reference/reconcile` | Owner; verify existing reference, never create a charge |
+| `GET /account/payout` | Authenticated; own masked bank/review status |
+| `GET /account/payout/banks` | Authenticated/rate-limited; supported Nigerian banks |
+| `POST /account/payout` | Verified organizer, step-up; `{bankCode,accountNumber,businessName,consent:true,password,code?}`; 202 review/uncertain |
+| `GET /admin/commerce` | Platform admin; latest 100 payout requests and oldest 100 unresolved package orders |
+| `PATCH /admin/plans/:code` | Admin, step-up; `{name,priceMinor,limits:{guests,occasions,collaborators,photos,storage,messages},active,password,code?}` |
+| `POST /admin/billing/:reference/reconcile` | Admin; provider verification |
+| `POST /admin/billing/:reference/close` | Admin, step-up; `{reason,confirmation:"Provider checkout cancelled; no payment received",password,code?}` after external cancellation/review |
+| `POST /admin/payouts/:userId/verify` | Admin, step-up; `{subaccountCode,identityReviewed:true,reason,password,code?}`; provider bank/owner/request verification required |
+| `POST /admin/payouts/:userId/block` | Admin, step-up; `{reason,password,code?}`; blocks new local contributions, not external settlement |
+| `POST /admin/payouts/:userId/reset` | Admin, step-up; `{reason,confirmation:"Provider absent or inactive; settlements reviewed",password,code?}`; blocked account and provider inactivity/absence review required |
+
+`code` is an authenticator or recovery code, required when MFA is enrolled. Password/MFA proof and audited changes are atomic. An unresolved order, stale price/review, quota limit or unavailable/unverified payout returns 409; invalid schemas/amount/route/currency verification return 422; missing provider/fingerprint configuration returns 503. Full financial exports omit checkout capabilities and verification fingerprints. The signed Paystack webhook dispatches package references separately from contributions; callbacks never grant entitlements.

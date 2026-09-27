@@ -1,3 +1,4 @@
+import { request } from "./api";
 import { motion, useScroll, useTransform } from "framer-motion";
 import {
   ArrowRight,
@@ -743,45 +744,48 @@ function Templates() {
   );
 }
 function Pricing() {
-  const offerings = [
-    {
-      label: "PILOT WORKSPACE",
-      title: "The working core",
-      value: "Event tools",
-      detail: "Current capabilities, not a paid-plan entitlement.",
-      items: [
-        "Guest lists and personalized invitations",
-        "Assigned occasions and RSVP",
-        "Seating and online check-in",
-        "Account security and scoped privacy tools",
-      ],
-    },
-    {
-      label: "OPTIONAL INTEGRATIONS",
-      title: "Connected services",
-      value: "Provider costs",
+  const [plans, setPlans] = useState<any[]>([]),
+    [error, setError] = useState("");
+  useEffect(() => {
+    request<any>("/plans")
+      .then((data) => setPlans(data.plans))
+      .catch(() =>
+        setError(
+          "The package catalog is temporarily unavailable. Check event settings before purchasing.",
+        ),
+      );
+  }, []);
+  const offerings = plans.map((plan) => {
+    const caps = JSON.parse(plan.limits_json);
+    return {
+      label:
+        plan.code === "free"
+          ? "FREE TIER"
+          : plan.active
+            ? plan.kind === "pack"
+              ? "ADD-ON PACK"
+              : "PER-EVENT PACKAGE"
+            : "DRAFT · NOT ON SALE",
+      title: plan.name,
+      value: `NGN ${(plan.price_minor / 100).toLocaleString()}`,
       detail:
-        "Requires approved provider accounts, configuration and acceptance testing.",
+        plan.code === "free"
+          ? "Included automatically with every event."
+          : "One-time purchase for one event; no recurring subscription.",
       items: [
-        "Opt-in email, SMS and WhatsApp",
-        "NGN gifts and contributions via Paystack",
-        "Human-reviewed AI drafting",
-        "Provider charges are separate",
-      ],
-    },
-    {
-      label: "NOT YET AVAILABLE",
-      title: "The product roadmap",
-      value: "In planning",
-      detail: "No purchase or delivery-date promise for these features.",
-      items: [
-        "Paid plans and billing entitlements",
-        "Refund and settlement automation",
-        "Offline check-in and guest video uploads",
-        "Advanced visual templates and localization",
-      ],
-    },
-  ];
+        caps.guests && `${caps.guests} guest places, including plus-ones`,
+        caps.occasions && `${caps.occasions} occasions`,
+        caps.collaborators &&
+          `${caps.collaborators} collaborators, excluding the owner`,
+        caps.photos && `${caps.photos} photos`,
+        caps.storage &&
+          `${Math.round(caps.storage / 1048576)} MiB photo storage`,
+        caps.messages
+          ? `${caps.messages} lifetime queued recipients`
+          : plan.kind === "plan" && "No queued outbound messages",
+      ].filter(Boolean),
+    };
+  });
   return (
     <div className="marketing m-inner">
       <Nav dark />
@@ -793,11 +797,17 @@ function Pricing() {
           <i>Plan with clarity.</i>
         </h1>
         <p>
-          This implementation does not offer paid Invibox plans or an upgrade
-          checkout. Start with the available workflows and configure optional
-          providers only when ready.
+          Start free with clear limits. Add capacity with one-time event
+          packages and packs. Draft paid prices are proposals, not an offer to
+          purchase; checkout opens only after operator activation and provider
+          configuration.
         </p>
       </section>
+      {error && (
+        <p role="status" className="m-price-note">
+          {error}
+        </p>
+      )}
       <section className="m-pricing">
         {offerings.map((offer, i) => (
           <div className={i === 1 ? "featured" : ""} key={offer.label}>
@@ -821,8 +831,13 @@ function Pricing() {
       </section>
       <p className="m-price-note">
         Payment processing and message-provider usage may incur external fees.
-        Guest contributions are not purchases of an Invibox plan. Public launch
-        requires an approved merchant, consent and operational policy.
+        Guest contributions go through each organizer’s verified payout
+        subaccount, not the package billing account. The platform contribution
+        share is currently zero; the organizer bears processing fees. Upgrades
+        are full-price, without proration. Packs carry forward up to safety
+        ceilings. Message credits count queued recipients, including later
+        failures or opt-outs, not successful deliveries. Public launch requires
+        approved pricing, merchant onboarding, consent and operational policies.
       </p>
       <Footer />
     </div>

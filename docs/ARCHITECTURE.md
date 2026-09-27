@@ -43,3 +43,8 @@ Authenticator credentials are isolated from profile exports. AES-GCM secrets bin
 Guest photo routes authenticate invitation capabilities independently of organizer cookies. Both host settings and per-photo moderation/sharing flags govern disclosure. Metadata is reserved before object upload; a separate upload reservation survives event/guest erasure so the cleanup worker does not race active storage writes. Expired reservations are recovered by cron. Gallery fetches are paginated and use authorization headers/blob URLs rather than embedding invitation tokens in image URLs.
 
 Consent-state changes generate database-triggered, source-labelled history. Owner/admin audit UI shows bounded recent records; owner exports include full retained consent history, and privacy erasure cascades through it. Browser invitation editors register an unsaved-change guard used by internal navigation and account/event switching.
+
+
+### Commerce boundary
+
+`commerce.ts` implements a public configurable catalog, immutable per-event package-order snapshots, exactly-once paid entitlement grants, owner recovery and platform-admin financial controls. Migration 0013 quota triggers validate direct mutations and defer bulk snapshot quotas to transaction completion. Contribution payments remain a distinct ledger and snapshot a verified organizer subaccount; package purchases must have no split/subaccount. Payout onboarding uses a stable keyed bank fingerprint, unique request identity, masked data and transaction-scoped review guards. Browser returns are informational, not financial truth. See [COMMERCE.md](COMMERCE.md).
