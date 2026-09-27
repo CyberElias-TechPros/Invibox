@@ -22,17 +22,30 @@ jobs:
           rm -rf .wrangler
           npm run db:migrate:local
           npm run worker:dev > /tmp/worker.log 2>&1 &
+          echo $! > /tmp/worker.pid
           npm run dev > /tmp/vite.log 2>&1 &
-          npx wait-on --timeout 60000 http-get://localhost:8787/api/v1/health http-get://localhost:5173 || (echo "=== worker.log ==="; cat /tmp/worker.log; echo "=== vite.log ==="; cat /tmp/vite.log; exit 1)
-          npm run smoke || (echo "=== worker.log ==="; cat /tmp/worker.log; echo "=== vite.log ==="; cat /tmp/vite.log; exit 1)
-          npm run test:regression || (echo "=== worker.log ==="; cat /tmp/worker.log; exit 1)
+          echo $! > /tmp/vite.pid
+          npx wait-on --timeout 60000 http-get://localhost:8787/api/v1/health http-get://localhost:5173 || (echo "wait-on failed"; echo "=== worker.log ==="; cat /tmp/worker.log; echo "=== vite.log ==="; cat /tmp/vite.log; echo "::error::wait-on failed worker log $(head -n 20 /tmp/worker.log | tr '\n' ' ')"; exit 1)
+          npm run smoke || (echo "smoke failed"; echo "=== worker.log ==="; cat /tmp/worker.log; echo "=== vite.log ==="; cat /tmp/vite.log; echo "::error::smoke failed $(tail -n 50 /tmp/worker.log | tr '\n' ' ')"; exit 1)
+          npm run test:regression || (echo "regression failed"; echo "=== worker.log ==="; cat /tmp/worker.log; echo "::error::regression failed $(tail -n 50 /tmp/worker.log | tr '\n' ' ')"; exit 1)
           npx playwright install --with-deps chromium
-          npm run test:e2e || (echo "=== worker.log ==="; cat /tmp/worker.log; echo "=== vite.log ==="; cat /tmp/vite.log; exit 1)
-      - name: Upload logs on failure
+          npm run test:e2e || (echo "e2e failed"; echo "=== worker.log ==="; cat /tmp/worker.log; echo "=== vite.log ==="; cat /tmp/vite.log; ls test-results || true; cat test-results/*/error-context.md 2>/dev/null | head -n 200 || true; echo "::error::e2e failed"; exit 1)
+      - name: Show logs on failure
         if: failure()
         run: |
-          echo "=== worker.log ==="; cat /tmp/worker.log || true
-          echo "=== vite.log ==="; cat /tmp/vite.log || true
+          echo "=== worker.log tail ==="; tail -n 200 /tmp/worker.log || true
+          echo "=== vite.log tail ==="; tail -n 200 /tmp/vite.log || true
+          echo "=== test-results ==="; ls -R test-results 2>/dev/null | head -n 200 || true
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            /tmp/worker.log
+            /tmp/vite.log
+            test-results/
+          retention-days: 2
       - run: npm audit --audit-level=high
       - run: npm run build
       - run: npx wrangler deploy --dry-run
