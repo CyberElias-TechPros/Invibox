@@ -1,0 +1,91 @@
+name: Deploy backend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "worker/**"
+      - "wrangler.toml"
+      - "scripts/configure-production.mjs"
+      - "scripts/ci-migrate-fallback.mjs"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/deploy-backend.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      INVIBOX_APP_ORIGIN: ${{ vars.INVIBOX_APP_ORIGIN }}
+      INVIBOX_API_ORIGIN: ${{ vars.INVIBOX_API_ORIGIN }}
+      CLOUDFLARE_D1_ID: ${{ vars.CLOUDFLARE_D1_ID }}
+      CLOUDFLARE_KV_ID: ${{ vars.CLOUDFLARE_KV_ID }}
+      R2_BUCKET: ${{ vars.R2_BUCKET }}
+      QUEUE_NAME: ${{ vars.QUEUE_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preflight secrets
+        run: |
+          missing=""
+          for v in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID INVIBOX_APP_ORIGIN INVIBOX_API_ORIGIN CLOUDFLARE_D1_ID CLOUDFLARE_KV_ID R2_BUCKET QUEUE_NAME; do
+            if [ -z "${!v}" ]; then missing="$missing $v"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required secrets/vars:$missing. Add CLOUDFLARE_API_TOKEN (Cloudflare dashboard > My Profile > API Tokens: Account Workers Scripts Write, D1 Write, KV Write, Queues Write, R2 Write) as a repo secret; the rest are already configured."
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # node_modules must exist or wrangler bundling fails (e.g. "Could not resolve zod").
+      - run: npm ci
+
+      - name: Validate production config
+        run: npm run configure:production -- --check
+
+      - name: Generate production config
+        run: npm run configure:production
+
+      - name: Sync worker secrets
+        run: |
+          for s in SESSION_PEPPER MFA_ENCRYPTION_KEY PAYOUT_VERIFICATION_KEY; do
+            val="$(printenv "$s")"
+            if [ -n "$val" ]; then
+              printf '%s' "$val" | npx wrangler secret put "$s" --config wrangler.production.toml
+            else
+              echo "::warning::GitHub secret $s not set; keeping existing worker secret."
+            fi
+          done
+        env:
+          SESSION_PEPPER: ${{ secrets.SESSION_PEPPER }}
+          MFA_ENCRYPTION_KEY: ${{ secrets.MFA_ENCRYPTION_KEY }}
+          PAYOUT_VERIFICATION_KEY: ${{ secrets.PAYOUT_VERIFICATION_KEY }}
+
+      - name: Apply D1 migrations
+        run: |
+          if npx wrangler d1 migrations apply invibox-db --remote --config wrangler.production.toml; then
+            echo "migrations apply OK"
+          else
+            echo "migrations apply failed (known wrangler trigger-splitting issue); falling back to per-file import"
+            node scripts/ci-migrate-fallback.mjs
+          fi
+
+      - run: npx wrangler deploy --config wrangler.production.toml
+
+      - name: Verify production health
+        run: |
+          api="${INVIBOX_API_ORIGIN%/}/api/v1/health"
+          body="$(curl -fsS "$api")"
+          echo "$body"
+          echo "$body" | grep -q '"environment":"production"' || { echo "::error::worker is not reporting environment=production"; exit 1; }
