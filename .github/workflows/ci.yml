@@ -12,14 +12,32 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm run format:check
       - run: npm run typecheck
       - run: npm test
+      - run: npm run test:database
       - run: npm run db:migrate:local
-      - name: Full-stack smoke test
+      - name: Start local stack
         run: |
+          rm -rf .wrangler
+          npm run db:migrate:local
           npm run worker:dev > /tmp/worker.log 2>&1 &
           npm run dev > /tmp/vite.log 2>&1 &
-          npx wait-on http-get://localhost:8787/api/v1/health http-get://localhost:5173
-          npm run smoke
+          npx wait-on --timeout 90000 http-get://localhost:8787/api/v1/health http-get://localhost:5173
+      - name: Smoke test
+        run: npm run smoke
+      - name: Regression test
+        run: npm run test:regression
+      - name: E2E test
+        run: |
+          npx playwright install --with-deps chromium
+          npm run test:e2e -- --retries=2 2>&1 | tee /tmp/e2e.log; status=${PIPESTATUS[0]}; echo "=== e2e.log tail ==="; tail -n 200 /tmp/e2e.log; echo "=== test-results ==="; ls -R test-results 2>&1 | head -n 200; for f in test-results/*/error-context.md; do echo "--- $f"; cat "$f" | head -n 200; done || true; if [ $status -ne 0 ]; then tail -n 50 /tmp/e2e.log | tr '\n' ' ' | head -c 1000 | xargs -0 -I{} echo "::error::e2e failed: {}"; fi; exit $status
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          echo "=== worker.log ==="; cat /tmp/worker.log || true
+          echo "=== vite.log ==="; cat /tmp/vite.log || true
+          echo "=== test-results ==="; ls -R test-results 2>&1 | head -n 100 || true
+      - run: npm audit --audit-level=high
       - run: npm run build
       - run: npx wrangler deploy --dry-run
