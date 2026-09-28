@@ -5,6 +5,10 @@
   "outputDirectory": "dist",
   "rewrites": [
     {
+      "source": "/api/:path*",
+      "destination": "https://invibox-api.autumn-surf-21ec.workers.dev/api/:path*"
+    },
+    {
       "source": "/app",
       "destination": "/index.html"
     },
